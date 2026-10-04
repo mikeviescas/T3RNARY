@@ -241,7 +241,7 @@ class MovementTests(unittest.TestCase):
         self.assertEqual(sum(result.discards[P.WHITE].values()), 0)
         self.assertEqual(sum(result.discards[P.BLACK].values()), 2)
 
-    def test_griffin_height_three_uses_two_by_three_leaps(self):
+    def test_griffin_height_three_uses_short_and_long_leaps(self):
         state = state_with(
             {
                 "E5": [pc(P.WHITE, T.INFANTRY), pc(P.WHITE, T.CHARIOT), pc(P.WHITE, T.GRIFFIN)],
@@ -251,7 +251,8 @@ class MovementTests(unittest.TestCase):
         moves = set(legal_actions(state))
         self.assertIn(MoveAction(sq("E5"), sq("H7")), moves)
         self.assertIn(MoveAction(sq("E5"), sq("G8")), moves)
-        self.assertNotIn(MoveAction(sq("E5"), sq("F7")), moves)
+        self.assertIn(MoveAction(sq("E5"), sq("F7")), moves)
+        self.assertIn(MoveAction(sq("E5"), sq("G6")), moves)
         self.assertNotIn(MoveAction(sq("E5"), sq("H9")), moves)
 
     def test_griffin_height_one_and_two_use_chess_chariot_leaps(self):

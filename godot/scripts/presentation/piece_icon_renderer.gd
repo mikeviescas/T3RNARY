@@ -1,6 +1,13 @@
 class_name PieceIconRenderer
 extends RefCounted
 
+const DRAGOON_ICON_PATH := "res://assets/icons/dragoon.svg"
+const CHARIOT_ICON_PATH := "res://assets/icons/chariot.svg"
+const GRIFFIN_ICON_PATH := "res://assets/icons/griffin.svg"
+const BALLISTA_ICON_PATH := "res://assets/icons/ballista.svg"
+
+static var _svg_textures: Dictionary = {}
+
 
 static func draw_icon(canvas: CanvasItem, kind: String, center: Vector2, radius: float, color: Color) -> void:
 	match kind:
@@ -38,68 +45,65 @@ static func supported_kinds() -> Array[String]:
 
 
 static func _draw_sovereign(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
+	# Crown, orb, and double base: a state emblem rather than a chess King.
+	canvas.draw_circle(c + Vector2(0.0, -0.51) * r, r * 0.105, color)
 	var crown := _points(c, r, [
-		Vector2(-0.58, 0.28), Vector2(-0.48, -0.38),
-		Vector2(-0.18, -0.08), Vector2(0.0, -0.56),
-		Vector2(0.18, -0.08), Vector2(0.48, -0.38),
-		Vector2(0.58, 0.28),
+		Vector2(-0.58, 0.24), Vector2(-0.50, -0.33),
+		Vector2(-0.20, -0.08), Vector2(0.0, -0.42),
+		Vector2(0.20, -0.08), Vector2(0.50, -0.33),
+		Vector2(0.58, 0.24),
 	])
 	canvas.draw_colored_polygon(crown, color)
-	canvas.draw_rect(Rect2(c + Vector2(-0.56, 0.26) * r, Vector2(1.12, 0.20) * r), color)
-	canvas.draw_line(c + Vector2(-0.50, 0.55) * r, c + Vector2(0.50, 0.55) * r, color, r * 0.12, true)
+	canvas.draw_line(c + Vector2(-0.58, 0.28) * r, c + Vector2(0.58, 0.28) * r, color, r * 0.16, true)
+	canvas.draw_line(c + Vector2(-0.48, 0.52) * r, c + Vector2(0.48, 0.52) * r, color, r * 0.13, true)
 
 
 static func _draw_infantry(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	canvas.draw_line(c + Vector2(-0.26, 0.62) * r, c + Vector2(-0.26, -0.58) * r, color, r * 0.13, true)
-	var flag := _points(c, r, [
-		Vector2(-0.20, -0.54), Vector2(0.52, -0.32),
-		Vector2(0.17, 0.02), Vector2(-0.20, -0.06),
-	])
-	canvas.draw_colored_polygon(flag, color)
+	# Three grounded spears read as a formation rather than a single Soldier.
+	for column in [-0.34, 0.0, 0.34]:
+		var tip_y: float = -0.64 if is_zero_approx(column) else -0.49
+		canvas.draw_line(c + Vector2(column, 0.55) * r, c + Vector2(column, tip_y + 0.15) * r, color, r * 0.105, true)
+		var spearhead := _points(c, r, [
+			Vector2(column, tip_y),
+			Vector2(column - 0.14, tip_y + 0.22),
+			Vector2(column + 0.14, tip_y + 0.22),
+		])
+		canvas.draw_colored_polygon(spearhead, color)
+	canvas.draw_line(c + Vector2(-0.52, 0.34) * r, c + Vector2(0.52, 0.34) * r, color, r * 0.10, true)
 
 
 static func _draw_dragoon(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	var horse := _points(c, r, [
-		Vector2(-0.50, 0.47), Vector2(-0.38, 0.04),
-		Vector2(-0.12, -0.28), Vector2(-0.24, -0.60),
-		Vector2(0.02, -0.46), Vector2(0.25, -0.62),
-		Vector2(0.24, -0.30), Vector2(0.49, -0.10),
-		Vector2(0.55, 0.18), Vector2(0.27, 0.28),
-		Vector2(0.16, 0.07), Vector2(-0.05, 0.22),
-		Vector2(0.17, 0.47),
-	])
-	canvas.draw_colored_polygon(horse, color)
-	canvas.draw_circle(c + Vector2(0.27, -0.18) * r, r * 0.055, Color(0.08, 0.08, 0.08, 0.88))
+	_draw_svg_icon(canvas, DRAGOON_ICON_PATH, c, r, color)
 
 
 static func _draw_chariot(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	var shield := _points(c, r, [
-		Vector2(0.0, -0.62), Vector2(0.53, -0.42),
-		Vector2(0.45, 0.24), Vector2(0.0, 0.65),
-		Vector2(-0.45, 0.24), Vector2(-0.53, -0.42),
-	])
-	canvas.draw_colored_polygon(shield, color)
-	var inner := _points(c, r, [
-		Vector2(0.0, -0.38), Vector2(0.29, -0.26),
-		Vector2(0.25, 0.14), Vector2(0.0, 0.39),
-		Vector2(-0.25, 0.14), Vector2(-0.29, -0.26),
-	])
-	canvas.draw_colored_polygon(inner, Color(0.5, 0.5, 0.5, 0.38))
+	_draw_svg_icon(canvas, CHARIOT_ICON_PATH, c, r, color)
+
+
+static func _draw_svg_icon(canvas: CanvasItem, path: String, c: Vector2, r: float, color: Color) -> void:
+	var texture := _svg_texture(path)
+	if texture == null:
+		return
+	var size := Vector2.ONE * r * 2.0
+	canvas.draw_texture_rect(texture, Rect2(c - size * 0.5, size), false, color)
+
+
+static func _svg_texture(path: String) -> Texture2D:
+	if _svg_textures.has(path):
+		return _svg_textures[path]
+	var source := FileAccess.get_file_as_string(path)
+	if source.is_empty():
+		return null
+	var image := Image.new()
+	if image.load_svg_from_string(source, 2.0) != OK:
+		return null
+	var texture := ImageTexture.create_from_image(image)
+	_svg_textures[path] = texture
+	return texture
 
 
 static func _draw_griffin(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	var wing := _points(c, r, [
-		Vector2(-0.50, 0.42), Vector2(-0.45, -0.23),
-		Vector2(-0.14, -0.48), Vector2(-0.02, -0.16),
-		Vector2(0.18, -0.56), Vector2(0.26, -0.12),
-		Vector2(0.52, -0.40), Vector2(0.42, 0.10),
-		Vector2(0.12, 0.31), Vector2(0.46, 0.55),
-		Vector2(-0.02, 0.48),
-	])
-	canvas.draw_colored_polygon(wing, color)
-	canvas.draw_circle(c + Vector2(-0.26, -0.26) * r, r * 0.19, color)
-	var beak := _points(c, r, [Vector2(-0.39, -0.31), Vector2(-0.67, -0.18), Vector2(-0.39, -0.10)])
-	canvas.draw_colored_polygon(beak, color)
+	_draw_svg_icon(canvas, GRIFFIN_ICON_PATH, c, r, color)
 
 
 static func _draw_marshal(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
@@ -122,15 +126,7 @@ static func _draw_trebuchet(canvas: CanvasItem, c: Vector2, r: float, color: Col
 
 
 static func _draw_ballista(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	var barrel := _points(c, r, [
-		Vector2(-0.56, -0.25), Vector2(0.35, -0.16),
-		Vector2(0.50, 0.04), Vector2(0.32, 0.22),
-		Vector2(-0.56, 0.22),
-	])
-	canvas.draw_colored_polygon(barrel, color)
-	canvas.draw_rect(Rect2(c + Vector2(-0.62, -0.32) * r, Vector2(0.18, 0.62) * r), color)
-	canvas.draw_circle(c + Vector2(0.10, 0.39) * r, r * 0.23, color)
-	canvas.draw_circle(c + Vector2(0.10, 0.39) * r, r * 0.09, Color(0.5, 0.5, 0.5, 0.42))
+	_draw_svg_icon(canvas, BALLISTA_ICON_PATH, c, r, color)
 
 
 static func _draw_spy(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
@@ -159,10 +155,17 @@ static func _draw_reinforcement(canvas: CanvasItem, c: Vector2, r: float, color:
 
 
 static func _draw_recall(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	for scale in [0.62, 0.41, 0.20]:
-		canvas.draw_arc(c, r * scale, -PI * 0.65, PI * 1.05, 24, color, r * 0.10, true)
-	var arrow := _points(c, r, [Vector2(0.33, -0.55), Vector2(0.69, -0.50), Vector2(0.50, -0.18)])
+	# A single returning path around the piece being called back.
+	canvas.draw_arc(c, r * 0.54, -PI * 0.72, PI * 0.78, 30, color, r * 0.12, true)
+	var arrow := _points(c, r, [
+		Vector2(-0.58, 0.17), Vector2(-0.69, 0.52), Vector2(-0.30, 0.43),
+	])
 	canvas.draw_colored_polygon(arrow, color)
+	var recalled_piece := _points(c, r, [
+		Vector2(0.0, -0.25), Vector2(0.24, 0.0),
+		Vector2(0.0, 0.25), Vector2(-0.24, 0.0),
+	])
+	canvas.draw_colored_polygon(recalled_piece, color)
 
 
 static func _points(center: Vector2, radius: float, normalized: Array[Vector2]) -> PackedVector2Array:

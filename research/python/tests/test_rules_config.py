@@ -17,7 +17,7 @@ from stack_chess.rules_config import CATALOG
 
 class SharedRuleConfigurationTests(unittest.TestCase):
     def test_catalog_identity_and_inventory(self):
-        self.assertEqual(CATALOG["id"], "core-pieces-v3")
+        self.assertEqual(CATALOG["id"], "core-pieces-v4")
         self.assertTrue(CATALOG["specials"]["sovereign"]["royal_attack"])
         self.assertEqual(len(CATALOG_HASH), 64)
         self.assertEqual(STARTING_COUNTS[PieceType.INFANTRY], 9)
@@ -31,7 +31,7 @@ class SharedRuleConfigurationTests(unittest.TestCase):
         vectors = PIECE_CONFIG[PieceType.GRIFFIN]["movement"]["vectors_by_height"]
         self.assertEqual(vectors["1"], [[1, 2], [2, 1]])
         self.assertEqual(vectors["2"], [[1, 2], [2, 1]])
-        self.assertEqual(vectors["3"], [[2, 3], [3, 2]])
+        self.assertEqual(vectors["3"], [[1, 2], [2, 1], [2, 3], [3, 2]])
 
     def test_rulesets_reference_same_catalog(self):
         self.assertEqual(CONTROL_RULES.id, "control-v3")

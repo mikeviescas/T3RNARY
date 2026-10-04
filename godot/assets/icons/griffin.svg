@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="55 55 390 390">
+  <defs>
+    <mask id="griffin-cutouts" maskUnits="userSpaceOnUse" x="55" y="55" width="390" height="390">
+      <rect x="55" y="55" width="390" height="390" fill="black"/>
+
+      <!-- Single swept wing mass -->
+      <path d="M294 309 C222 292 132 252 91 178 C65 132 81 88 126 72
+               C180 53 239 76 280 122 C232 108 198 124 185 158
+               C168 204 214 263 306 294 Z" fill="white"/>
+
+      <!-- Seated body, eagle neck and beaked head -->
+      <path d="M177 291 C211 260 260 250 298 264 C326 275 339 298 331 326
+               L373 371 L341 382 L306 347 L299 410 L263 410 L255 343
+               C229 354 211 377 203 410 L164 410 C166 365 180 331 200 311 Z"
+            fill="white"/>
+      <path d="M279 294 C286 249 297 207 311 176 C320 156 323 136 316 115
+               C338 126 355 123 372 112 C379 129 377 145 367 157
+               L407 172 L371 192 C351 193 342 205 339 224
+               C335 250 340 276 353 300 Z" fill="white"/>
+
+      <!-- Simple curled tail -->
+      <path d="M189 310 C151 302 124 315 117 340 C112 358 94 362 84 348"
+            fill="none" stroke="white" stroke-width="18" stroke-linecap="round"/>
+
+      <!-- Two feather cuts and an eye -->
+      <path d="M130 78 C104 140 143 229 278 300" fill="none" stroke="black" stroke-width="12" stroke-linecap="round"/>
+      <path d="M201 76 C171 139 198 231 293 300" fill="none" stroke="black" stroke-width="12" stroke-linecap="round"/>
+      <ellipse cx="350" cy="153" rx="8" ry="5" fill="black"/>
+    </mask>
+  </defs>
+  <rect x="55" y="55" width="390" height="390" fill="white" mask="url(#griffin-cutouts)"/>
+</svg>

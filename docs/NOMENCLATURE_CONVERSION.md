@@ -31,7 +31,7 @@ contract version 1 archive or an older external report.
 | `forbidden_active_targets` | `forbidden_top_piece_targets` |
 | policy family `king_race` | `sovereign_race` |
 | policy family `king_defense` | `sovereign_defense` |
-| piece catalog `core-pieces-v2` | piece catalog `core-pieces-v3` |
+| piece catalog `core-pieces-v2` or `core-pieces-v3` | piece catalog `core-pieces-v4` |
 
 When converting JSON, change both top-level and embedded state
 `contract_version` values from `1` to `2`, replace identifiers according to

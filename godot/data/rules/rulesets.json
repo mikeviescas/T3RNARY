@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "catalog_id": "core-pieces-v3",
-  "catalog_hash": "18531d03a0b4a14e680a195a7fc70ef02968d5eb65132909e7748ac0cf1ffb12",
+  "catalog_id": "core-pieces-v4",
+  "catalog_hash": "95c409ad299a5773cad642d4fd94179f018c9685b1fb63e2bba0a5fd775558a0",
   "rulesets": {
     "control-v3": {
       "development_opening": false,

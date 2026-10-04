@@ -48,7 +48,7 @@ Each player begins with 27 pieces:
 Pieces waiting to be played are kept in your **reserve**. Captured and removed
 pieces are kept face-up in their owner's **discard pile**.
 
-## 4. Develop Your Starting Position
+## 4. The Opening Phase
 
 Begin with an empty board.
 
@@ -60,42 +60,23 @@ Begin with an empty board.
 All development pieces must be placed in their owner's territory. You may build
 stacks during development, but only to height 2.
 
-Spy, Ballista, Trebuchet, and Recall cannot be used during development. No
-pieces MOVE until both players finish developing.
+Spy, Ballista, Trebuchet, and Recall may not be used during development. No
+pieces may MOVE until the Opening phase is complete.
 
-After development, White takes the first normal turn.
+## 5. Take a Turn
 
-## 5. Example Opening
-
-Here is one way a game could begin:
-
-| Step | White | Black |
-|---:|---|---|
-| 1 | Places Sovereign on E1 | Places Sovereign on E9 |
-| 2 | Places Infantry on E3 | Places Infantry on E7 |
-| 3 | Places Dragoon on C2 | Places Chariot on G8 |
-| 4 | Places Marshal on D2 | Places Griffin on F8 |
-| 5 | Places Infantry on F3 | Places Dragoon on C8 |
-
-Both players have now placed their Sovereign and 4 other pieces. Development is
-complete, and White takes the first normal turn.
-
-White uses MOVE to advance the Infantry 1 Stack from E3 to E4, entering neutral
-territory and signaling that the board is open.
-
-## 6. Take a Turn
-
-On your turn, take exactly one action:
+On your turn, you must take one of the following actions:
 
 - **MOVE** one stack already on the board; or
 - **PLACE** one piece from your reserve.
 
-An **ATTACK** is a MOVE onto an enemy-occupied square. A **SHOOT** is a PLACE
-that fires a Ballista or Trebuchet. These are not extra actions.
+A MOVE becomes an **ATTACK** when it ends on an enemy-occupied square. A PLACE
+becomes a **SHOOT** when you place a Ballista or Trebuchet and fire it by
+selecting a valid target.
 
-You cannot pass. After your action, play passes to your opponent.
+After your action, play passes to your opponent.
 
-## 7. Build Stacks
+## 6. Build Stacks
 
 A stack may contain 1, 2, or 3 pieces. Its **TOP piece** identifies the stack
 and determines its movement and abilities. Buried pieces add height and
@@ -110,51 +91,69 @@ Reinforcement    ← bottom piece
 This is a **Marshal 3 Stack**. It is a Marshal Stack because its TOP piece is a
 Marshal.
 
-You cannot MOVE onto a friendly stack. Build friendly stacks by using PLACE.
+You may not MOVE onto a friendly stack. Build friendly stacks by using PLACE.
 
 Before you build your first stack of height 3, you must have completed a
-non-Sovereign MOVE. Each player unlocks height 3 separately.
+non-Sovereign MOVE.
 
-## 8. Place and Shoot
-
-After development, you may PLACE a normal piece:
-
-- on an empty square in your territory;
-- on an empty square in neutral territory; or
-- on top of one of your stacks of height 1 or 2 anywhere on the board.
-
-You cannot place a normal piece on an empty square in enemy territory, on an
-enemy stack, on a stack of height 3, or on a Sovereign.
-
-Spy, Recall, and Reinforcement have special placement rules described below.
-
-## 9. Move and Attack
+## 7. Move and Attack
 
 MOVE a stack according to its TOP piece. Movement ranges are maximums, so a
 range-5 stack may move anywhere from 1 to 5 squares.
 
-Except for the Griffin, stacks cannot move through occupied squares.
+Except for the Griffin, stacks may not move through occupied squares.
 
-A stack may finish its MOVE on:
-
-- an empty square; or
-- an enemy-occupied square it can attack.
+A stack may finish its MOVE on an empty square or an enemy-occupied square.
 
 A MOVE onto an enemy-occupied square is an ATTACK. Compare the attacker's
 height to the defender's height.
 
 ### Equal or Taller Attacker
 
-Remove the entire defending stack. The attacking stack takes its square.
+Remove the entire defending stack. The attacking stack takes the square.
 
 ### Shorter Attacker
 
 Remove the entire attacking stack. Then remove the same number of pieces from
-the **bottom** of the defending stack. The surviving defenders remain in place.
+the **bottom** of the defending stack. The surviving pieces of the defender
+remain in place.
 
-Example: A height-1 attacker strikes a height-3 stack. The attacker is removed,
-along with the bottom piece of the defending stack. The defender remains as a
-height-2 stack.
+Example: A height-1 stack attacks a height-3 stack. The attacking stack is
+removed, along with the bottom piece of the defending stack. The defender
+remains as a height-2 stack.
+
+## 8. Place and Shoot
+
+Once the Opening phase is complete, you may PLACE a normal piece:
+
+- on an empty square in your territory;
+- on an empty square in neutral territory; or
+- on top of one of your stacks of height 1 or 2 anywhere on the board.
+
+You may not place a normal piece on an empty square in enemy territory, on an
+enemy stack, on a stack of height 3, or on a Sovereign.
+
+Spy, Recall, and Reinforcement follow the placement rules in **Special Pieces**.
+
+When you PLACE a Ballista or Trebuchet, it may SHOOT. See
+[Artillery: Ballista & Trebuchet](#11-artillery-ballista--trebuchet).
+
+## 9. Movement Pieces
+
+| Unit | 1 Stack | 2 Stack | 3 Stack | Movement |
+|---|---:|---:|---:|---|
+| Infantry | 1 | 2 | 3 | Straight forward |
+| Dragoon | 3 | 5 | 9 | Diagonal |
+| Chariot | 3 | 5 | 9 | Horizontal or vertical |
+| Marshal | 3 | 5 | 9 | Horizontal, vertical, or diagonal |
+| Griffin | 1×2 or 2×1 | 1×2 or 2×1 | 1×2, 2×1, 2×3, or 3×2 | Exact L-shaped leap |
+
+Infantry Stacks can only move and attack straight forward.
+
+Dragoon, Chariot, and Marshal Stacks may not move through occupied squares.
+
+Griffin Stacks leap over occupied squares and must land on the exact
+destination. A Griffin 3 Stack may use either the shorter or longer leap.
 
 ## 10. Sovereign Stack
 
@@ -168,30 +167,11 @@ Remove the entire defending stack and move the Sovereign Stack onto its square.
 
 ### Conquer
 
-White wins by moving its Sovereign Stack onto rank 9. Black wins by moving its
-Sovereign Stack onto rank 1.
+A Sovereign can win by landing anywhere on the opponent's back rank.
 
-## 11. Movement Pieces
+## 11. Artillery: Ballista & Trebuchet
 
-| Stack | Height 1 | Height 2 | Height 3 | Movement |
-|---|---:|---:|---:|---|
-| Infantry Stack | 1 | 2 | 3 | Straight forward |
-| Dragoon Stack | 3 | 5 | 9 | Diagonal |
-| Chariot Stack | 3 | 5 | 9 | Horizontal or vertical |
-| Marshal Stack | 3 | 5 | 9 | Horizontal, vertical, or diagonal |
-| Griffin Stack | 1×2 or 2×1 | 1×2 or 2×1 | 2×3 or 3×2 | Exact L-shaped leap |
-
-Infantry Stacks can only move and attack straight forward.
-
-Dragoon, Chariot, and Marshal Stacks cannot move through occupied squares.
-
-Griffin Stacks leap over occupied squares and must land on the exact
-destination. A Griffin 3 Stack uses the longer leap instead of its shorter
-leap.
-
-## 12. Ballista and Trebuchet
-
-Ballista and Trebuchet Stacks cannot MOVE. When either piece is placed on the
+Ballista and Trebuchet Stacks may not MOVE. When either piece is placed on the
 board or on top of a stack, the resulting stack may immediately SHOOT once.
 
 | Artillery | Firing directions |
@@ -200,7 +180,7 @@ board or on top of a stack, the resulting stack may immediately SHOOT once.
 | Trebuchet | Either forward diagonal |
 
 Artillery range is 3 at height 1, 5 at height 2, and 9 at height 3. Artillery
-cannot fire through occupied squares or target a Sovereign.
+may not fire through occupied squares or target a Sovereign.
 
 Against an equal or shorter target, remove the entire target stack. Against a
 taller target, remove a number of pieces from the target's bottom equal to the
@@ -208,9 +188,11 @@ height of the firing stack. The artillery stack is unaffected.
 
 SHOOT is optional.
 
-## 13. Spy
+## 12. Special Pieces
 
-A Spy Stack cannot MOVE.
+### Spy
+
+A Spy Stack may not MOVE.
 
 You may PLACE Spy directly onto an enemy height-1 or height-2 stack. To do so,
 you must have matching pieces in your reserve for every piece in the target
@@ -219,32 +201,41 @@ stack.
 Discard the enemy stack. Rebuild it with your matching reserve pieces, then
 place Spy on top. You now control the converted stack.
 
-Spy cannot convert a stack of height 3 or a Sovereign.
+Spy may not convert a stack of height 3 or a Sovereign.
 
-## 14. Recall
+### Recall
 
 Use Recall as a PLACE action to return one of your discarded pieces to play.
 
 Discard the Recall piece, then PLACE the returned piece normally. Any
 placement ability of the returned piece takes effect.
 
-Recall cannot return a Sovereign or another Recall.
-
-## 15. Reinforcement
+### Reinforcement
 
 PLACE Reinforcement underneath one of your non-Sovereign stacks of height 1 or
 2. It increases the stack's height without changing its TOP piece or stack
 identity.
 
-Reinforcement cannot be placed on an empty square, on top of a stack, under a
+Reinforcement may not be placed on an empty square, on top of a stack, under a
 stack of height 3, or under a Sovereign.
 
-## 16. Ending Without a Winner
+## 13. Example Opening
 
-The game is a draw if the player whose turn it is has no legal MOVE or PLACE.
+Here is one way a game could begin:
 
-For additional rules questions and unusual interactions, consult the FAQ and
-Technical Rules Index below.
+| Step | White | Black |
+|---:|---|---|
+| 1 | Places Sovereign on E1 | Places Sovereign on E9 |
+| 2 | Places Infantry on E3 | Places Infantry on E7 |
+| 3 | Places Dragoon on C2 | Places Chariot on G8 |
+| 4 | Places Marshal on D2 | Places Griffin on F8 |
+| 5 | Places Infantry on F3 | Places Dragoon on C8 |
+
+Both players have now placed their Sovereign and 4 other pieces. The Opening
+phase is complete.
+
+White chooses to MOVE the Infantry 1 Stack from E3 to E4, entering neutral
+territory and signaling that the board is open.
 
 ---
 
@@ -255,19 +246,14 @@ Technical Rules Index below.
 No. ATTACK is the name for a MOVE onto an enemy-occupied square. SHOOT is the
 name for a PLACE that fires a Ballista or Trebuchet.
 
+## Can I pass without taking an action?
+
+No. On your turn, you must MOVE or PLACE.
+
 ## Do Sovereigns use check or checkmate?
 
 No. A Sovereign Stack may move into danger or remain under attack. A player
 wins CAPTURE only by actually removing the opposing Sovereign.
-
-## Does a conquering Sovereign need to survive a turn on the back row?
-
-No. CONQUER wins immediately when the Sovereign Stack completes the MOVE, even
-if the destination is attacked.
-
-## Does the opponent need to run out of reserve pieces before CONQUER is legal?
-
-No. Reserve supply does not affect CONQUER.
 
 ## Can a Sovereign attack a taller stack?
 
@@ -280,13 +266,13 @@ No. A Sovereign Stack can only be removed by an ATTACK.
 
 ## Can I PLACE a piece on a friendly stack in enemy territory?
 
-Yes. After development, you may add a piece to a legal friendly stack anywhere
-on the board. You still cannot PLACE normally onto an empty enemy-territory
-square.
+Yes. Once the Opening phase is complete, you may add a piece to a legal friendly
+stack anywhere on the board. You still may not PLACE normally onto an empty
+enemy-territory square.
 
 ## Can Spy be played without converting an enemy stack?
 
-Yes. Spy may be placed normally, although a Spy Stack cannot MOVE.
+Yes. Spy may be placed normally, although a Spy Stack may not MOVE.
 
 ## Can Spy convert a stack in enemy territory?
 
@@ -329,14 +315,9 @@ determines the stack's identity.
 
 ## What happens when Infantry reaches the far back row?
 
-An Infantry Stack cannot move farther forward. Another friendly piece may still
+An Infantry Stack may not move farther forward. Another friendly piece may still
 be placed on top if the stack is shorter than height 3, changing its TOP piece
 and stack identity.
-
-## Are repetition and no-progress draws used?
-
-Not in the current beta rules. Only a player having no legal action produces an
-automatic draw.
 
 ---
 
@@ -399,7 +380,7 @@ the record can be replayed from an empty board.
 
 This index is the authoritative quick reference for edge cases, simulator
 comparison, and AI rules review. The current implemented preset is
-`attrition-development-infiltration-v1` using piece catalog `core-pieces-v3`.
+`attrition-development-infiltration-v1` using piece catalog `core-pieces-v4`.
 
 ## A. Core State
 
@@ -424,7 +405,6 @@ comparison, and AI rules review. The current implemented preset is
 - MOVE is prohibited until both players complete development.
 - Height 3 is locked separately for each player until that player completes a
   non-Sovereign MOVE.
-- White takes the first normal turn.
 
 ## C. Normal PLACE Destinations
 
@@ -460,9 +440,9 @@ comparison, and AI rules review. The current implemented preset is
 - Chariot Stack: orthogonal ray, ranges 3/5/9 by height.
 - Marshal Stack: omnidirectional ray, ranges 3/5/9 by height.
 - Griffin 1 and Griffin 2 Stacks: exact 1×2 and 2×1 leaps.
-- Griffin 3 Stack: exact 2×3 and 3×2 leaps only.
+- Griffin 3 Stack: exact 1×2, 2×1, 2×3, and 3×2 leaps.
 - Ballista, Trebuchet, and Spy Stacks are immobile.
-- Reinforcement cannot be a TOP piece.
+- Reinforcement may not be a TOP piece.
 - Recall never remains on the board.
 
 ## G. Artillery Resolution
@@ -480,12 +460,12 @@ comparison, and AI rules review. The current implemented preset is
 
 ## H. Special-Piece Limits
 
-- Sovereign Stack: cannot be stacked, Reinforced, Recalled, converted, or
+- Sovereign Stack: may not be stacked, Reinforced, Recalled, converted, or
   targeted by artillery.
 - Spy conversion: target maximum height 2; Sovereign prohibited; replacements paid
   from reserve; original target order preserved.
 - Recall: Sovereign and Recall are prohibited return pieces.
-- Reinforcement: inserted at bottom; cannot be a TOP piece; Sovereign
+- Reinforcement: inserted at bottom; may not be a TOP piece; Sovereign
   prohibited.
 
 ## I. Turn and Terminal Rules
@@ -498,7 +478,7 @@ comparison, and AI rules review. The current implemented preset is
 
 ## J. Configuration Identity
 
-- Piece catalog: `core-pieces-v3`.
+- Piece catalog: `core-pieces-v4`.
 - Ruleset: `attrition-development-infiltration-v1`.
 - MOVE against taller stack: `mutual_bottom_attrition`.
 - Artillery against taller stack: `target_bottom_attrition`.

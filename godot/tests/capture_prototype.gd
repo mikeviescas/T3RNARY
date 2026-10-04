@@ -12,7 +12,24 @@ func _init() -> void:
 	viewport.add_child(prototype)
 	var user_args := OS.get_cmdline_user_args()
 	if not user_args.is_empty():
-		prototype.selected_square = str(user_args[0]).to_upper()
+		var mode := str(user_args[0]).to_upper()
+		if mode in ["PLAY", "PLAY_BLACK"]:
+			prototype._start_new_game()
+			prototype._handle_play_square("E1")
+			prototype._handle_play_square("E9")
+			if mode == "PLAY_BLACK":
+				prototype._select_reserve_piece("infantry")
+				for action in prototype._legal_actions():
+					if action.type == "place" and action.piece == "infantry" and action.get("effect_target") == null:
+						prototype._handle_play_square(str(action.destination))
+						break
+			prototype._select_reserve_piece("infantry")
+		elif mode == "REPLAY" and user_args.size() >= 2:
+			prototype._load_replay(str(user_args[1]))
+			if user_args.size() >= 3:
+				prototype._set_replay_index(int(user_args[2]))
+		else:
+			prototype.selected_square = mode
 	await process_frame
 	await process_frame
 	await process_frame

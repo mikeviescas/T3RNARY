@@ -120,7 +120,7 @@ The current named presets are:
   use mutual bottom attrition, while shorter artillery attacks remove only
   bottom target pieces.
 
-All four current presets use catalog `core-pieces-v3`, whose Royal Attack rule
+All four current presets use catalog `core-pieces-v4`, whose Royal Attack rule
 lets a Sovereign capture and replace any adjacent enemy stack regardless of
 height. The normal threat system still applies after the capture.
 
