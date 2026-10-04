@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "catalog_id": "core-pieces-v3",
+  "catalog_hash": "18531d03a0b4a14e680a195a7fc70ef02968d5eb65132909e7748ac0cf1ffb12",
+  "rulesets": {
+    "control-v3": {
+      "development_opening": false,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "infiltration_victory": false,
+      "move_vs_taller": "illegal",
+      "artillery_vs_taller": "illegal"
+    },
+    "development-v3": {
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": true,
+      "infiltration_victory": false,
+      "move_vs_taller": "illegal",
+      "artillery_vs_taller": "illegal"
+    },
+    "attrition-control-v2": {
+      "development_opening": false,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "infiltration_victory": false,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "attrition-development-v2": {
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": true,
+      "infiltration_victory": false,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "development-infiltration-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": true,
+      "infiltration_victory": true,
+      "move_vs_taller": "illegal",
+      "artillery_vs_taller": "illegal"
+    },
+    "attrition-development-infiltration-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": true,
+      "infiltration_victory": true,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    }
+  }
+}

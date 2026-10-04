@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "id": "core-pieces-v3",
+  "board": {
+    "size": 9,
+    "files": "ABCDEFGHI",
+    "max_stack_height": 3,
+    "home_ranks_per_player": 3,
+    "neutral_ranks": 3
+  },
+  "range_by_height": {
+    "1": 3,
+    "2": 5,
+    "3": 9
+  },
+  "pieces": {
+    "sovereign": {
+      "display_name": "Sovereign",
+      "notation": "V",
+      "starting_count": 1,
+      "movement": {"mode": "ray", "direction_mode": "omnidirectional", "range_mode": "one"},
+      "artillery": null
+    },
+    "spy": {
+      "display_name": "Spy",
+      "notation": "Sp",
+      "starting_count": 1,
+      "movement": {"mode": "immobile", "direction_mode": "none", "range_mode": "none"},
+      "artillery": null
+    },
+    "ballista": {
+      "display_name": "Ballista",
+      "notation": "B",
+      "starting_count": 1,
+      "movement": {"mode": "immobile", "direction_mode": "none", "range_mode": "none"},
+      "artillery": {"direction_mode": "forward_and_sideways", "range_mode": "height_table", "sovereign_target": false}
+    },
+    "trebuchet": {
+      "display_name": "Trebuchet",
+      "notation": "T",
+      "starting_count": 1,
+      "movement": {"mode": "immobile", "direction_mode": "none", "range_mode": "none"},
+      "artillery": {"direction_mode": "forward_diagonal", "range_mode": "height_table", "sovereign_target": false}
+    },
+    "dragoon": {
+      "display_name": "Dragoon",
+      "notation": "D",
+      "starting_count": 3,
+      "movement": {"mode": "ray", "direction_mode": "diagonal", "range_mode": "height_table"},
+      "artillery": null
+    },
+    "chariot": {
+      "display_name": "Chariot",
+      "notation": "C",
+      "starting_count": 3,
+      "movement": {"mode": "ray", "direction_mode": "orthogonal", "range_mode": "height_table"},
+      "artillery": null
+    },
+    "griffin": {
+      "display_name": "Griffin",
+      "notation": "G",
+      "starting_count": 3,
+      "movement": {
+        "mode": "leap",
+        "direction_mode": "none",
+        "range_mode": "none",
+        "vectors_by_height": {
+          "1": [[1, 2], [2, 1]],
+          "2": [[1, 2], [2, 1]],
+          "3": [[2, 3], [3, 2]]
+        }
+      },
+      "artillery": null
+    },
+    "marshal": {
+      "display_name": "Marshal",
+      "notation": "M",
+      "starting_count": 2,
+      "movement": {"mode": "ray", "direction_mode": "omnidirectional", "range_mode": "height_table"},
+      "artillery": null
+    },
+    "infantry": {
+      "display_name": "Infantry",
+      "notation": "I",
+      "starting_count": 9,
+      "movement": {"mode": "ray", "direction_mode": "forward", "range_mode": "stack_height"},
+      "artillery": null
+    },
+    "recall": {
+      "display_name": "Recall",
+      "notation": "Rc",
+      "starting_count": 1,
+      "movement": {"mode": "immobile", "direction_mode": "none", "range_mode": "none"},
+      "artillery": null
+    },
+    "reinforcement": {
+      "display_name": "Reinforcement",
+      "notation": "Rf",
+      "starting_count": 2,
+      "movement": {"mode": "immobile", "direction_mode": "none", "range_mode": "none"},
+      "artillery": null
+    }
+  },
+  "specials": {
+    "sovereign": {"royal_attack": true},
+    "spy": {"maximum_target_height": 2, "forbidden_top_piece_targets": ["sovereign"]},
+    "recall": {"forbidden_piece_kinds": ["sovereign", "recall"]},
+    "reinforcement": {"insertion": "bottom", "forbidden_top_piece_targets": ["sovereign"]}
+  }
+}

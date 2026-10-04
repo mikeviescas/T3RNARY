@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/state.schema.json",
+  "title": "T3RNARY game state",
+  "type": "object",
+  "required": ["contract_version", "rules", "board", "reserves", "discards", "turn", "winner", "is_draw", "ply", "development_placements", "height_three_unlocked"],
+  "properties": {
+    "contract_version": {"const": 2},
+    "rules": {"$ref": "ruleset.schema.json"},
+    "board": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-I][1-9]$"},
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 3,
+        "items": {"$ref": "#/$defs/piece"}
+      }
+    },
+    "reserves": {"$ref": "#/$defs/playerInventories"},
+    "discards": {"$ref": "#/$defs/playerInventories"},
+    "turn": {"$ref": "#/$defs/player"},
+    "winner": {"oneOf": [{"$ref": "#/$defs/player"}, {"type": "null"}]},
+    "is_draw": {"type": "boolean"},
+    "ply": {"type": "integer", "minimum": 0},
+    "development_placements": {"$ref": "#/$defs/playerIntegers"},
+    "height_three_unlocked": {"$ref": "#/$defs/playerBooleans"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "player": {"type": "string", "enum": ["white", "black"]},
+    "pieceType": {"type": "string", "enum": ["sovereign", "spy", "ballista", "trebuchet", "dragoon", "chariot", "griffin", "marshal", "infantry", "recall", "reinforcement"]},
+    "piece": {
+      "type": "object",
+      "required": ["owner", "kind"],
+      "properties": {"owner": {"$ref": "#/$defs/player"}, "kind": {"$ref": "#/$defs/pieceType"}},
+      "additionalProperties": false
+    },
+    "inventory": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/pieceType"},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "playerInventories": {
+      "type": "object",
+      "required": ["white", "black"],
+      "properties": {"white": {"$ref": "#/$defs/inventory"}, "black": {"$ref": "#/$defs/inventory"}},
+      "additionalProperties": false
+    },
+    "playerIntegers": {
+      "type": "object",
+      "required": ["white", "black"],
+      "properties": {"white": {"type": "integer", "minimum": 0}, "black": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "playerBooleans": {
+      "type": "object",
+      "required": ["white", "black"],
+      "properties": {"white": {"type": "boolean"}, "black": {"type": "boolean"}},
+      "additionalProperties": false
+    }
+  }
+}
+

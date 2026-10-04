@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/rule-catalog.schema.json",
+  "title": "T3RNARY shared piece catalog",
+  "type": "object",
+  "required": ["schema_version", "id", "board", "range_by_height", "pieces", "specials"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "minLength": 1},
+    "board": {
+      "type": "object",
+      "required": ["size", "files", "max_stack_height", "home_ranks_per_player", "neutral_ranks"],
+      "properties": {
+        "size": {"type": "integer", "minimum": 1},
+        "files": {"type": "string", "minLength": 1},
+        "max_stack_height": {"type": "integer", "minimum": 1},
+        "home_ranks_per_player": {"type": "integer", "minimum": 1},
+        "neutral_ranks": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "range_by_height": {
+      "type": "object",
+      "patternProperties": {"^[1-9][0-9]*$": {"type": "integer", "minimum": 1}},
+      "additionalProperties": false
+    },
+    "pieces": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/pieceDefinition"}
+    },
+    "specials": {
+      "type": "object",
+      "required": ["sovereign", "spy", "recall", "reinforcement"],
+      "properties": {
+        "sovereign": {
+          "type": "object",
+          "required": ["royal_attack"],
+          "properties": {"royal_attack": {"type": "boolean"}},
+          "additionalProperties": false
+        },
+        "spy": {
+          "type": "object",
+          "required": ["maximum_target_height", "forbidden_top_piece_targets"],
+          "properties": {
+            "maximum_target_height": {"type": "integer", "minimum": 1},
+            "forbidden_top_piece_targets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+          },
+          "additionalProperties": false
+        },
+        "recall": {
+          "type": "object",
+          "required": ["forbidden_piece_kinds"],
+          "properties": {"forbidden_piece_kinds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}},
+          "additionalProperties": false
+        },
+        "reinforcement": {
+          "type": "object",
+          "required": ["insertion", "forbidden_top_piece_targets"],
+          "properties": {
+            "insertion": {"const": "bottom"},
+            "forbidden_top_piece_targets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "movement": {
+      "type": "object",
+      "required": ["mode", "direction_mode", "range_mode"],
+      "properties": {
+        "mode": {"enum": ["immobile", "ray", "leap"]},
+        "direction_mode": {"enum": ["none", "omnidirectional", "forward", "diagonal", "orthogonal"]},
+        "range_mode": {"enum": ["none", "one", "stack_height", "height_table"]},
+        "vectors_by_height": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 1}, {"type": "integer", "minimum": 1}], "items": false}
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "artillery": {
+      "type": "object",
+      "required": ["direction_mode", "range_mode", "sovereign_target"],
+      "properties": {
+        "direction_mode": {"enum": ["forward_and_sideways", "forward_diagonal"]},
+        "range_mode": {"const": "height_table"},
+        "sovereign_target": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "pieceDefinition": {
+      "type": "object",
+        "required": ["display_name", "notation", "starting_count", "movement", "artillery"],
+        "properties": {
+          "display_name": {"type": "string", "minLength": 1},
+          "notation": {"type": "string", "minLength": 1},
+          "starting_count": {"type": "integer", "minimum": 0},
+        "movement": {"$ref": "#/$defs/movement"},
+        "artillery": {"oneOf": [{"$ref": "#/$defs/artillery"}, {"type": "null"}]}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/ruleset.schema.json",
+  "title": "T3RNARY ruleset",
+  "type": "object",
+  "required": ["id", "development_opening", "development_placements_per_player", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "catalog_id": {"type": "string", "minLength": 1},
+    "catalog_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "development_opening": {"type": "boolean"},
+    "development_placements_per_player": {"type": "integer", "minimum": 0},
+    "development_home_only": {"type": "boolean"},
+    "development_specials_prohibited": {"type": "boolean"},
+    "height_three_requires_nonsovereign_move": {"type": "boolean"},
+    "infiltration_victory": {"type": "boolean"},
+    "move_vs_taller": {"enum": ["illegal", "mutual_bottom_attrition"]},
+    "artillery_vs_taller": {"enum": ["illegal", "target_bottom_attrition"]}
+  },
+  "additionalProperties": false
+}

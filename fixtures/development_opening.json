@@ -1,0 +1,40 @@
+{
+  "contract_version": 2,
+  "fixture_id": "development-opening-basic",
+  "initial_state": {
+    "contract_version": 2,
+    "rules": {
+      "id": "development-v3",
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": true
+    },
+    "board": {
+      "E1": [{"owner": "white", "kind": "sovereign"}],
+      "E9": [{"owner": "black", "kind": "sovereign"}]
+    },
+    "reserves": {
+      "white": {"sovereign": 0, "spy": 1, "ballista": 1, "trebuchet": 1, "dragoon": 3, "chariot": 3, "griffin": 3, "marshal": 2, "infantry": 9, "recall": 1, "reinforcement": 2},
+      "black": {"sovereign": 0, "spy": 1, "ballista": 1, "trebuchet": 1, "dragoon": 3, "chariot": 3, "griffin": 3, "marshal": 2, "infantry": 9, "recall": 1, "reinforcement": 2}
+    },
+    "discards": {"white": {}, "black": {}},
+    "turn": "white",
+    "winner": null,
+    "is_draw": false,
+    "ply": 0,
+    "development_placements": {"white": 0, "black": 0},
+    "height_three_unlocked": {"white": false, "black": false}
+  },
+  "steps": [
+    {"action": {"type": "place", "piece": "infantry", "destination": "A1"}, "expected": {"ply": 1, "turn": "black"}},
+    {"action": {"type": "place", "piece": "infantry", "destination": "A9"}, "expected": {"ply": 2, "turn": "white"}},
+    {"action": {"type": "place", "piece": "chariot", "destination": "A1"}, "expected": {"ply": 3, "turn": "black"}},
+    {"action": {"type": "place", "piece": "chariot", "destination": "A9"}, "expected": {"ply": 4, "turn": "white"}},
+    {"action": {"type": "place", "piece": "infantry", "destination": "A2"}, "expected": {"ply": 5, "turn": "black"}},
+    {"action": {"type": "place", "piece": "infantry", "destination": "A8"}, "expected": {"ply": 6, "turn": "white"}},
+    {"action": {"type": "place", "piece": "griffin", "destination": "B2"}, "expected": {"ply": 7, "turn": "black"}},
+    {"action": {"type": "place", "piece": "griffin", "destination": "B8"}, "expected": {"ply": 8, "turn": "white"}}
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/action.schema.json",
+  "title": "T3RNARY action",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "source", "destination"],
+      "properties": {
+        "type": {"const": "move"},
+        "source": {"$ref": "#/$defs/square"},
+        "destination": {"$ref": "#/$defs/square"}
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "piece", "destination"],
+      "properties": {
+        "type": {"enum": ["place", "recall"]},
+        "piece": {"$ref": "#/$defs/pieceType"},
+        "destination": {"$ref": "#/$defs/square"},
+        "effect_target": {"$ref": "#/$defs/square"}
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "square": {"type": "string", "pattern": "^[A-I][1-9]$"},
+    "pieceType": {
+      "type": "string",
+      "enum": ["sovereign", "spy", "ballista", "trebuchet", "dragoon", "chariot", "griffin", "marshal", "infantry", "recall", "reinforcement"]
+    }
+  }
+}
+

@@ -1,0 +1,10 @@
+.godot/
+*.tmp
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# Local simulation output built from experimental or retired assumptions.
+research/replays/
+research/reports/

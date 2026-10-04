@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/ruleset-collection.schema.json",
+  "title": "T3RNARY shared ruleset collection",
+  "type": "object",
+  "required": ["schema_version", "catalog_id", "catalog_hash", "rulesets"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "catalog_id": {"type": "string", "minLength": 1},
+    "catalog_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "rulesets": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/rulesetValues"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "moveCombatMode": {"enum": ["illegal", "mutual_bottom_attrition"]},
+    "artilleryCombatMode": {"enum": ["illegal", "target_bottom_attrition"]},
+    "rulesetValues": {
+      "type": "object",
+      "required": ["development_opening", "development_placements_per_player", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move", "infiltration_victory", "move_vs_taller", "artillery_vs_taller"],
+      "properties": {
+        "development_opening": {"type": "boolean"},
+        "development_placements_per_player": {"type": "integer", "minimum": 0},
+        "development_home_only": {"type": "boolean"},
+        "development_specials_prohibited": {"type": "boolean"},
+        "height_three_requires_nonsovereign_move": {"type": "boolean"},
+        "infiltration_victory": {"type": "boolean"},
+        "move_vs_taller": {"$ref": "#/$defs/moveCombatMode"},
+        "artillery_vs_taller": {"$ref": "#/$defs/artilleryCombatMode"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

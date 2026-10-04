@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://t3rnary.game/schemas/replay.schema.json",
+  "title": "T3RNARY replay",
+  "type": "object",
+  "required": ["contract_version", "game_id", "initial_state", "actions"],
+  "properties": {
+    "contract_version": {"const": 2},
+    "game_id": {"type": "string", "minLength": 1},
+    "created_utc": {"type": "string", "format": "date-time"},
+    "initial_state": {"$ref": "state.schema.json"},
+    "actions": {"type": "array", "items": {"$ref": "action.schema.json"}},
+    "metadata": {"type": "object"},
+    "annotations": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}
+
