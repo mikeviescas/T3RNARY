@@ -29,6 +29,7 @@ func _init() -> void:
 	_test_golden_fixture()
 	_test_visual_system_contract()
 	_test_visual_prototype_uses_live_move_rules()
+	_test_simulator_manual_play_and_replay()
 	if failures == 0:
 		print("T3RNARY rules tests: %d checks passed" % checks)
 		quit(0)
@@ -65,7 +66,7 @@ func p(owner: String, kind: String) -> Dictionary:
 
 func _test_shared_rule_configuration() -> void:
 	expect(Rules.configuration_errors().is_empty(), "shared rule JSON passes strict validation")
-	expect(Rules.catalog_id() == "core-pieces-v3", "piece catalog id loads")
+	expect(Rules.catalog_id() == "core-pieces-v4", "piece catalog id loads")
 	expect(Rules.special_rules("sovereign").royal_attack, "Royal Attack comes from shared catalog")
 	expect(Rules.catalog_hash().length() == 64, "piece catalog has a reproducible SHA-256 identity")
 	expect(Rules.starting_inventory().infantry == 9, "starting inventory comes from shared catalog")
@@ -73,7 +74,7 @@ func _test_shared_rule_configuration() -> void:
 	expect(Rules.piece_notation(Rules.SPY) == "Sp", "special-unit notation comes from shared catalog")
 	var griffin: Dictionary = Rules.piece_definition(Rules.GRIFFIN)
 	expect(griffin.movement.vectors_by_height["1"] == [[1.0, 2.0], [2.0, 1.0]], "height-one Griffin vectors come from shared catalog")
-	expect(griffin.movement.vectors_by_height["3"] == [[2.0, 3.0], [3.0, 2.0]], "height-three Griffin vectors come from shared catalog")
+	expect(griffin.movement.vectors_by_height["3"] == [[1.0, 2.0], [2.0, 1.0], [2.0, 3.0], [3.0, 2.0]], "height-three Griffin vectors come from shared catalog")
 	var ruleset := Rules.development_ruleset()
 	expect(ruleset.id == "development-v3" and ruleset.catalog_hash == Rules.catalog_hash(), "ruleset records its shared catalog identity")
 	expect(Rules.attrition_control_ruleset().move_vs_taller == "mutual_bottom_attrition", "MOVE attrition ruleset loads")
@@ -191,7 +192,8 @@ func _test_griffin_height_three_moves() -> void:
 	var actions := GameEngine.legal_actions(state)
 	expect(has(actions, {"type":"move", "source":"E5", "destination":"H7"}), "height-three Griffin has 3x2 leap")
 	expect(has(actions, {"type":"move", "source":"E5", "destination":"G8"}), "height-three Griffin has 2x3 leap")
-	expect(not has(actions, {"type":"move", "source":"E5", "destination":"F7"}), "height-three Griffin replaces the 1x2 leap")
+	expect(has(actions, {"type":"move", "source":"E5", "destination":"F7"}), "height-three Griffin retains the 1x2 leap")
+	expect(has(actions, {"type":"move", "source":"E5", "destination":"G6"}), "height-three Griffin retains the 2x1 leap")
 	expect(not has(actions, {"type":"move", "source":"E5", "destination":"H9"}), "height-three Griffin has no obsolete 3x4 leap")
 
 
@@ -304,6 +306,60 @@ func _test_visual_prototype_uses_live_move_rules() -> void:
 	expect(not height_two_griffin.has("B4") and not height_two_griffin.has("G5"), "height-two Griffin does not receive 2x3 or 3x2 moves")
 	var height_three_griffin: Dictionary = prototype.legal_move_markers("C6")
 	expect(height_three_griffin.has("A3") and height_three_griffin.has("E9"), "height-three Griffin receives 2x3 and 3x2 moves")
-	expect(not height_three_griffin.has("B4") and not height_three_griffin.has("D4"), "height-three Griffin no longer uses 1x2 or 2x1 moves")
+	expect(height_three_griffin.has("B4") and height_three_griffin.has("D4"), "height-three Griffin retains 1x2 and 2x1 moves")
 	expect(not height_three_griffin.has("G3") and not height_three_griffin.has("F2"), "height-three Griffin does not receive obsolete 3x4 or 4x3 moves")
+	prototype.free()
+
+
+func _test_simulator_manual_play_and_replay() -> void:
+	var prototype := VisualPrototype.new()
+	prototype._start_new_game()
+	expect(prototype.game_state.is_empty(), "new manual game begins with Sovereign placement")
+	expect(prototype._reference_owner() == Rules.WHITE, "reference tokens begin with the White setup player")
+	prototype._handle_play_square("B1")
+	expect(prototype._reference_owner() == Rules.BLACK, "reference tokens switch to Black for Black Sovereign placement")
+	prototype._handle_play_square("H9")
+	expect(not prototype.game_state.is_empty(), "two Sovereign choices initialize the live game")
+	expect(prototype._reference_owner() == Rules.WHITE, "reference tokens match White on the first normal turn")
+	expect(prototype.game_state.board.has("B1") and prototype.game_state.board.has("H9"), "manual setup preserves both chosen Sovereign files")
+	prototype._select_reserve_piece(Rules.INFANTRY)
+	var placement: Dictionary = {}
+	for action in GameEngine.legal_actions(prototype.game_state):
+		if action.type == "place" and action.piece == Rules.INFANTRY and action.get("effect_target") == null:
+			placement = action
+			break
+	expect(not placement.is_empty(), "manual interface exposes a legal Infantry placement")
+	prototype._handle_play_square(str(placement.destination))
+	expect(prototype.game_state.ply == 1 and prototype.game_state.turn == Rules.BLACK, "manual board click applies the selected legal action")
+	expect(prototype._reference_owner() == Rules.BLACK, "reference tokens follow the active player after an action")
+	expect(prototype._reserve_pile_counts(Rules.INFANTRY, 9) == [5, 4], "full Infantry reserve is displayed as five- and four-piece piles")
+	expect(prototype._reserve_pile_counts(Rules.INFANTRY, 7) == [5, 2], "Infantry four-pile dwindles before the five-pile")
+	expect(prototype._reserve_pile_counts(Rules.INFANTRY, 3) == [3, 0], "empty Infantry pile remains represented after its pieces are spent")
+	prototype._undo_manual_action()
+	expect(prototype.game_state.ply == 0 and prototype.game_state.turn == Rules.WHITE, "manual UNDO restores the preceding state")
+	expect(prototype.manual_redo_actions.size() == 1, "manual UNDO retains the action for REDO")
+	prototype._redo_manual_action()
+	expect(prototype.game_state.ply == 1 and prototype.game_state.turn == Rules.BLACK, "manual REDO restores the later state")
+	expect(prototype.manual_actions.size() == 1 and prototype.manual_redo_actions.is_empty(), "manual REDO restores action history")
+	var human_document := prototype._human_replay_document()
+	expect(human_document.metadata.source == "human_hotseat", "human games identify their source for analysis")
+	expect(human_document.actions.size() == 1 and human_document.metadata.plies == 1, "human game recording contains the replayable action history")
+	prototype._load_replay_document(human_document)
+	expect(prototype.replay_states.size() == 2 and prototype.replay_states[-1].ply == 1, "recorded human games load directly in replay review")
+	prototype.view_mode = "play"
+	prototype._undo_manual_action()
+	expect(prototype.game_state.ply == 0, "manual history can still move backward after REDO")
+
+	var fixture = Codec.load_json("res://../fixtures/development_opening.json")
+	var replay_action_list: Array = []
+	for step in fixture.steps:
+		replay_action_list.append(step.action)
+	prototype._load_replay_document({
+		"game_id": "test-replay",
+		"initial_state": fixture.initial_state,
+		"actions": replay_action_list,
+	})
+	expect(prototype.replay_states.size() == replay_action_list.size() + 1, "replay review reconstructs every recorded board state")
+	prototype._set_replay_index(prototype.replay_states.size() - 1)
+	expect(prototype.game_state.ply == replay_action_list.size(), "replay navigation reaches the final recorded ply")
 	prototype.free()

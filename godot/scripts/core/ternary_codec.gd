@@ -86,6 +86,15 @@ static func load_json(path: String) -> Variant:
 	return parsed
 
 
+static func save_json(path: String, document: Dictionary) -> Error:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_error("Could not write JSON file: %s" % path)
+		return FileAccess.get_open_error()
+	file.store_string(JSON.stringify(document, "\t", false) + "\n")
+	return OK
+
+
 static func stable_state_json(state: Dictionary) -> String:
 	return JSON.stringify(normalize_state(state), "", true)
 

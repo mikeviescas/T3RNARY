@@ -14,7 +14,7 @@ the structured development opening.
 - stack-height capture restrictions
 - Infantry, Dragoon, Chariot, Marshal, and Griffin movement
 - Griffin 1 and Griffin 2 Stacks use 1x2/2x1 leaps
-- Griffin 3 Stacks use 2x3/3x2 leaps, replacing the shorter leap
+- Griffin 3 Stacks may use either 1x2/2x1 or 2x3/3x2 leaps
 - artillery range 3/5/9 by resulting stack height
 - Spy conversion with replacement material paid from reserve
 - converted enemy material goes to discard

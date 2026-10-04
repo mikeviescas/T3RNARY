@@ -19,7 +19,7 @@ counts, and opening parameters have one source of truth.
 
 ## Current milestone
 
-Foundation milestone (Stages 0–2):
+Interactive simulator milestone:
 
 - Godot 4 project shell
 - versioned state, action, replay, and ruleset contracts with JSON Schemas
@@ -28,11 +28,13 @@ Foundation milestone (Stages 0–2):
 - development-opening rules
 - canonical unit identifiers shared by both engines, reports, and replays
 - headless engine tests and golden JSON fixtures
+- local hot-seat play for both sides, including player-selected Sovereign files
+- engine-generated MOVE/ATTACK and PLACE/SHOOT targets
+- stack inspection, undo, and full tournament-replay navigation
 
-The visual system prototype now establishes the vector tabletop direction:
-round dimensional tokens, physical stacks, three-territory board treatment,
-and full-stack inspection. Binding it to live hot-seat play is the next Stage 3
-milestone.
+The simulator now binds the vector tabletop presentation to the live Godot
+rules engine. See [`docs/simulator.md`](docs/simulator.md) for controls and
+replay-loading behavior.
 
 ## Run the GDScript tests
 

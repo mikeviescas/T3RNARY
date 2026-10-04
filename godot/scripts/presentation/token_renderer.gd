@@ -21,7 +21,8 @@ static func draw_stack(
 	var count := kinds.size()
 	var rise := radius * STACK_RISE_RATIO
 	for index in range(count):
-		var layer_center := center + Vector2(0.0, float(count - 1 - index) * rise)
+		# Anchor the bottom checker on its square and build the stack upward.
+		var layer_center := center - Vector2(0.0, float(index) * rise)
 		var is_top := index == count - 1
 		draw_token(canvas, layer_center, radius, owner, str(kinds[index]), is_top, selected and is_top, hovered and is_top)
 
@@ -59,6 +60,22 @@ static func draw_token(
 	canvas.draw_arc(c, radius * 0.61, PI, TAU, 24, Color(1.0, 1.0, 1.0, 0.17), maxf(1.0, radius * 0.035), true)
 	if show_icon:
 		Icons.draw_icon(canvas, kind, c - Vector2(0.0, radius * 0.03), radius * 0.58, Palette.token_ink(owner))
+
+
+static func draw_empty_token(
+	canvas: CanvasItem,
+	center: Vector2,
+	radius: float,
+	owner: String
+) -> void:
+	# An empty reserve position keeps the physical inventory layout legible
+	# without suggesting that a playable piece remains.
+	var ghost := Color(Palette.token_edge(owner), 0.34)
+	var inner := Color(Palette.token_face(owner), 0.08)
+	canvas.draw_circle(center + Vector2(radius * 0.06, radius * 0.17), radius, Color(0.0, 0.0, 0.0, 0.16))
+	canvas.draw_circle(center, radius, inner)
+	canvas.draw_arc(center, radius, 0.0, TAU, 40, ghost, maxf(1.5, radius * 0.10), true)
+	canvas.draw_arc(center, radius * 0.69, 0.0, TAU, 36, Color(ghost, 0.22), maxf(1.0, radius * 0.06), true)
 
 
 static func _ellipse(center: Vector2, radii: Vector2, segments := 36) -> PackedVector2Array:

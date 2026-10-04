@@ -27,12 +27,29 @@ game state and legal actions without owning rules.
 All eleven pieces share the same body geometry. This ensures that a converted
 Spy Stack changes ownership coherently without acquiring a special token form.
 
+## Insignia language
+
+The renamed units use purpose-built silhouettes rather than inherited chess
+symbols:
+
+- Sovereign: crown, orb, and double base;
+- Infantry: a grounded three-spear formation;
+- Dragoon: a compact war-horse head with minimal eye and nostril cuts;
+- Chariot: a side profile built around one dominant spoked wheel and forward shaft;
+- Griffin: a seated profile dominated by three swept wing forms;
+- Ballista: a diagonal heavy bow, taut string, bolt, and stock;
+- Recall: a returning path encircling the piece being called back.
+
+Marshal, Trebuchet, Spy, and Reinforcement retain their established star,
+siege arm, eye, and structural-cross marks.
+
 ## Stacks
 
-Each level of a stack is displaced vertically and retains its own shaded wall,
-rim, and contact shadow. The top token carries the TOP piece's insignia and
-shows the stack's identity. Selection uses a restrained brass halo rather than
-a height numeral.
+The bottom token remains centered on its square and each additional level rises
+toward the top of the board. Every level retains its own shaded wall, rim, and
+contact shadow. The top token carries the TOP piece's insignia and shows the
+stack's identity. Selection uses a restrained brass halo rather than a height
+numeral.
 
 The inspector presents the stack from TOP to bottom with explicit TOP and
 Buried roles. This preserves the physical board metaphor while making hidden
@@ -51,16 +68,18 @@ materials are differentiated using multiple signals:
 The intent is for territory to feel manufactured into the board rather than
 painted over it by an analysis interface.
 
-## Prototype boundary
+## Simulator modes
 
-The current scene demonstrates the vector construction, full icon family,
-territories, physical stacks, selection, hover lift, rules-generated
-move/capture markers, and stack inspection. It uses a deliberately composed
-sample position. Binding the complete position and PLACE interactions to live
-hot-seat play is the next presentation milestone.
+The scene supports three views. Demo preserves a deliberately composed visual
+test position. Play binds the board and reserves to live rules-engine state for
+two-player local play. Replay reconstructs every recorded state from a
+tournament replay and supports first, previous, next, and final-ply navigation.
+
+MOVE/ATTACK and PLACE/SHOOT markers always come from the rules engine. The
+stack inspector works identically in all three modes.
 
 ![Visual system prototype](images/visual-prototype.png)
 
 The visual prototype immediately exposed an incorrect Griffin progression in
 the original simulation rules. Griffin 1 and Griffin 2 Stacks use traditional
-1x2/2x1 leaps; a Griffin 3 Stack instead uses 2x3/3x2 leaps.
+1x2/2x1 leaps; a Griffin 3 Stack may also use 2x3/3x2 leaps.

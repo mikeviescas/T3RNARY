@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="70 70 360 360">
+  <defs>
+    <mask id="chariot-cutouts" maskUnits="userSpaceOnUse" x="70" y="70" width="360" height="360">
+      <rect x="70" y="70" width="360" height="360" fill="black"/>
+      <g transform="translate(250 226) scale(0.86) translate(-250 -226) translate(15 0)" fill="white" stroke="white" stroke-linecap="square" stroke-linejoin="round">
+        <path d="M76 174 C125 182 151 156 202 124 C241 100 273 94 304 96 L304 268 L385 268 L385 307 L139 307 L139 226 C115 226 94 220 76 214 Z" stroke-width="5"/>
+        <circle cx="171" cy="298" r="91" stroke-width="5"/>
+      </g>
+      <g transform="translate(250 226) scale(0.86) translate(-250 -226) translate(15 0)" fill="none" stroke="black" stroke-linecap="round">
+        <circle cx="171" cy="298" r="80" stroke-width="8"/>
+        <path d="M171 238 V278 M171 318 V358 M111 298 H151 M191 298 H231 M128 255 L156 283 M186 313 L214 341 M214 255 L186 283 M156 313 L128 341" stroke-width="10"/>
+      </g>
+      <g transform="translate(250 226) scale(0.86) translate(-250 -226) translate(15 0)">
+        <circle cx="171" cy="298" r="17" fill="black"/>
+      </g>
+    </mask>
+  </defs>
+  <rect x="70" y="70" width="360" height="360" fill="white" mask="url(#chariot-cutouts)"/>
+</svg>

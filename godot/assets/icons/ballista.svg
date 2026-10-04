@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="55 55 390 390">
+  <defs>
+    <mask id="ballista-cutouts" maskUnits="userSpaceOnUse" x="55" y="55" width="390" height="390">
+      <rect x="55" y="55" width="390" height="390" fill="black"/>
+
+      <!-- Heavy diagonal bow limb -->
+      <path d="M81 368 C141 325 114 225 178 171 C228 129 304 140 371 76"
+            fill="none" stroke="white" stroke-width="32" stroke-linecap="square" stroke-linejoin="round"/>
+
+      <!-- Taut bow string -->
+      <path d="M83 369 L346 337 L374 78" fill="none" stroke="white" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <!-- Central bolt and stock -->
+      <path d="M111 91 L391 384" fill="none" stroke="white" stroke-width="24" stroke-linecap="square"/>
+      <path d="M91 69 L137 87 L108 116 Z" fill="white"/>
+      <path d="M366 352 L426 407 L399 434 L341 376 Z" fill="white"/>
+
+      <!-- Torsion collar -->
+      <path d="M127 115 L157 145 M145 96 L176 127" fill="none" stroke="white" stroke-width="14" stroke-linecap="square"/>
+    </mask>
+  </defs>
+  <rect x="55" y="55" width="390" height="390" fill="white" mask="url(#ballista-cutouts)"/>
+</svg>
