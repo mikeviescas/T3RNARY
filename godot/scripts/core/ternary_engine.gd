@@ -33,7 +33,10 @@ static func initial_state(rules: Dictionary = {}, sovereign_files := Vector2i(4,
 	if rules.get("development_opening", false):
 		_add_setup_piece(state, Rules.WHITE, Rules.SOVEREIGN, Rules.square(sovereign_files.x, 0))
 		_add_setup_piece(state, Rules.BLACK, Rules.SOVEREIGN, Rules.square(sovereign_files.y, 8))
-		var initially_unlocked: bool = not bool(rules.get("height_three_requires_nonsovereign_move", false))
+		var initially_unlocked: bool = not (
+			bool(rules.get("height_three_requires_nonsovereign_move", false))
+			or bool(rules.get("height_three_requires_shared_neutral_presence", false))
+		)
 		state.height_three_unlocked = {Rules.WHITE: initially_unlocked, Rules.BLACK: initially_unlocked}
 	else:
 		for entry in [[Rules.WHITE, Rules.SOVEREIGN, "E1"], [Rules.WHITE, Rules.INFANTRY, "D2"], [Rules.WHITE, Rules.INFANTRY, "E2"], [Rules.WHITE, Rules.INFANTRY, "F2"], [Rules.BLACK, Rules.SOVEREIGN, "E9"], [Rules.BLACK, Rules.INFANTRY, "D8"], [Rules.BLACK, Rules.INFANTRY, "E8"], [Rules.BLACK, Rules.INFANTRY, "F8"]]:
@@ -321,9 +324,9 @@ static func apply_action(state: Dictionary, raw_action: Dictionary, adjudicate_d
 					result.board[action.destination] = moving
 			else:
 				result.board[action.destination] = moving
-			if moving[-1].kind != Rules.SOVEREIGN:
+			if state.rules.get("height_three_requires_nonsovereign_move", false) and moving[-1].kind != Rules.SOVEREIGN:
 				result.height_three_unlocked[player] = true
-			elif state.rules.get("infiltration_victory", false):
+			if state.rules.get("infiltration_victory", false) and moving[-1].kind == Rules.SOVEREIGN:
 				var destination_rank := Rules.square_to_xy(action.destination).y
 				if destination_rank == (Rules.board_size() - 1 if player == Rules.WHITE else 0):
 					result.winner = player
@@ -337,6 +340,12 @@ static func apply_action(state: Dictionary, raw_action: Dictionary, adjudicate_d
 			_apply_basic_placement(result, player, action.piece, action.destination, action.get("effect_target"))
 	if was_development:
 		result.development_placements[player] += 1
+	if not was_development and state.rules.get("height_three_requires_shared_neutral_presence", false):
+		for occupied_square in result.board:
+			var occupied_rank := Rules.square_to_xy(str(occupied_square)).y
+			if occupied_rank >= Rules.home_ranks() and occupied_rank < Rules.home_ranks() + Rules.neutral_ranks():
+				result.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+				break
 	result.ply += 1
 	if result.winner == null:
 		result.turn = Rules.opponent(player)
@@ -381,20 +390,49 @@ static func _discard_stack(state: Dictionary, stack: Array) -> void:
 		state.discards[piece.owner][piece.kind] += 1
 
 
-static func is_sovereign_threatened(state: Dictionary, player: String) -> bool:
-	var sovereign_square := ""
+static func sovereign_square(state: Dictionary, player: String) -> String:
 	for destination in state.board:
 		var stack: Array = state.board[destination]
 		if stack[-1].owner == player and stack[-1].kind == Rules.SOVEREIGN:
-			sovereign_square = destination
-			break
-	if sovereign_square.is_empty():
+			return str(destination)
+	return ""
+
+
+static func stack_controls_square(state: Dictionary, source: String, target: String) -> bool:
+	if not state.board.has(source):
 		return false
-	for source in state.board:
+	return target in _movement_destinations(state, source)
+
+
+static func sovereign_attack_sources(state: Dictionary, attacker: String) -> Array:
+	var target := sovereign_square(state, Rules.opponent(attacker))
+	var sources: Array = []
+	if target.is_empty():
+		return sources
+	for source_value in state.board:
+		var source := str(source_value)
 		var stack: Array = state.board[source]
-		if stack[-1].owner == Rules.opponent(player) and sovereign_square in _movement_destinations(state, source):
+		if stack[-1].owner == attacker and stack_controls_square(state, source, target):
+			sources.append(source)
+	sources.sort()
+	return sources
+
+
+static func is_square_protected(state: Dictionary, player: String, square: String, excluding_source := "") -> bool:
+	var probe := state.duplicate(true)
+	probe.board.erase(square)
+	for source_value in probe.board:
+		var source := str(source_value)
+		if source == excluding_source:
+			continue
+		var stack: Array = probe.board[source]
+		if stack[-1].owner == player and stack_controls_square(probe, source, square):
 			return true
 	return false
+
+
+static func is_sovereign_threatened(state: Dictionary, player: String) -> bool:
+	return not sovereign_attack_sources(state, Rules.opponent(player)).is_empty()
 
 
 static func validate_state(state: Dictionary, enforce_inventory := false) -> Array:

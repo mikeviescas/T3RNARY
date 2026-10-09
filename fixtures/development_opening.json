@@ -9,7 +9,8 @@
       "development_placements_per_player": 4,
       "development_home_only": true,
       "development_specials_prohibited": true,
-      "height_three_requires_nonsovereign_move": true
+      "height_three_requires_nonsovereign_move": true,
+      "height_three_requires_shared_neutral_presence": false
     },
     "board": {
       "E1": [{"owner": "white", "kind": "sovereign"}],

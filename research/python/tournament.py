@@ -9,6 +9,7 @@ import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 
 from stack_chess import (
     CONTROL_RULES,
@@ -24,15 +25,20 @@ from stack_chess import (
     is_sovereign_threatened,
     legal_actions,
     piece_display_name,
+    preview_action,
     ruleset_by_id,
+    stack_controls_square,
     validate_state,
 )
 from stack_chess.contract import action_to_dict, state_to_dict
 from stack_chess.policies import (
     PIECE_VALUES,
     game_phase,
+    is_royal_interposition_trap,
     opening_target_profile,
     policy_by_name,
+    sovereign_attack_profile,
+    valuable_burial_value,
 )
 
 
@@ -77,6 +83,16 @@ class GameResult:
     max_position_repeats: int
     limit_diagnostics: dict[str, object] | None = None
     win_reason: str | None = None
+    captures: int = 0
+    move_actions: int = 0
+    place_actions: int = 0
+    spy_conversions: int = 0
+    artillery_shots: int = 0
+    attrition_events: int = 0
+    neutral_gate_ply: int | None = None
+    first_height_three_ply: int | None = None
+    final_reserve_pieces: int = 0
+    final_board_pieces: int = 0
 
 
 def _limit_diagnostics(
@@ -200,6 +216,106 @@ def _is_capture_action(state: GameState, action: object) -> bool:
     return bool(getattr(action, "effect_target", None) is not None or _is_spy_conversion(state, action))
 
 
+def _capture_removed_pieces(state: GameState, action: object) -> tuple:
+    if isinstance(action, MoveAction):
+        target = state.board.get(action.destination, ())
+        attacker = state.board[action.source]
+        if (
+            target
+            and attacker[-1].kind is not PieceType.SOVEREIGN
+            and len(attacker) < len(target)
+            and state.rules.move_vs_taller == "mutual_bottom_attrition"
+        ):
+            return target[:len(attacker)]
+        return target
+    if _is_spy_conversion(state, action):
+        return state.board[action.destination]
+    effect_target = getattr(action, "effect_target", None)
+    if effect_target is None:
+        return ()
+    target = state.board[effect_target]
+    existing = state.board.get(action.destination)
+    firing_height = 1 + (len(existing) if existing else 0)
+    if (
+        firing_height < len(target)
+        and state.rules.artillery_vs_taller == "target_bottom_attrition"
+    ):
+        return target[:firing_height]
+    return target
+
+
+def _capture_own_immediate_loss(state: GameState, action: object) -> tuple:
+    if not isinstance(action, MoveAction):
+        return ()
+    attacker = state.board[action.source]
+    target = state.board.get(action.destination)
+    if (
+        target
+        and attacker[-1].kind is not PieceType.SOVEREIGN
+        and len(attacker) < len(target)
+        and state.rules.move_vs_taller == "mutual_bottom_attrition"
+    ):
+        return attacker
+    return ()
+
+
+def _capture_quality(state: GameState, action: object) -> dict[str, bool]:
+    """Classify a capture without searching beyond the opponent's next MOVE."""
+    if not _is_capture_action(state, action):
+        return {}
+    player = state.turn
+    result = preview_action(state, action)
+    sovereign_safe = not is_sovereign_threatened(result, player)
+    removed_value = sum(
+        0.0 if piece.kind is PieceType.SOVEREIGN else PIECE_VALUES[piece.kind]
+        for piece in _capture_removed_pieces(state, action)
+    )
+    own_loss_value = sum(
+        PIECE_VALUES[piece.kind]
+        for piece in _capture_own_immediate_loss(state, action)
+    )
+    favorable = removed_value >= own_loss_value
+
+    actor_square = action.destination
+    actor = result.board.get(actor_square)
+    survives = bool(actor and actor[-1].owner is player)
+    immediately_recapturable = survives and any(
+        stack[-1].owner is player.opponent
+        and stack_controls_square(result, square, actor_square)
+        for square, stack in result.board.items()
+    )
+    secure = survives and not immediately_recapturable
+    forcing = is_sovereign_threatened(result, player.opponent)
+    is_artillery_shot = (
+        not isinstance(action, MoveAction)
+        and getattr(action, "piece", None) in {PieceType.BALLISTA, PieceType.TREBUCHET}
+        and getattr(action, "effect_target", None) is not None
+    )
+    return {
+        "sovereign_safe": sovereign_safe,
+        "favorable": favorable,
+        "secure": secure,
+        "free": sovereign_safe and favorable and secure and not is_artillery_shot,
+        "forcing": forcing,
+    }
+
+
+def _capture_quality_declined(
+    label: str,
+    available: bool,
+    capture_chosen: bool,
+    chosen_quality: dict[str, bool],
+) -> bool:
+    if not available:
+        return False
+    # "Free declined" answers whether the player passed up capturing at all.
+    # When several captures exist, selecting a different capture is still an
+    # accepted capture opportunity, even if that action has another quality.
+    if label == "free" and capture_chosen:
+        return False
+    return not chosen_quality.get(label, False)
+
+
 DECISION_REASONS = (
     "sovereign_capture",
     "infiltration_win",
@@ -281,6 +397,8 @@ def play_game(
     sovereign_files: tuple[int, int] | None = None,
     ruleset_id: str | None = None,
     limit_replays: list[dict[str, object]] | None = None,
+    replays: list[dict[str, object]] | None = None,
+    tactical_search: bool = False,
 ) -> GameResult:
     exclude_behavioral_telemetry = (
         white_policy_name == black_policy_name == "evasion"
@@ -289,8 +407,16 @@ def play_game(
         defaultdict(Counter) if exclude_behavioral_telemetry else telemetry
     )
     policies = {
-        Player.WHITE: policy_by_name(white_policy_name, mirror_opening=mirror_opening),
-        Player.BLACK: policy_by_name(black_policy_name, mirror_opening=mirror_opening),
+        Player.WHITE: policy_by_name(
+            white_policy_name,
+            mirror_opening=mirror_opening,
+            tactical_search=tactical_search,
+        ),
+        Player.BLACK: policy_by_name(
+            black_policy_name,
+            mirror_opening=mirror_opening,
+            tactical_search=tactical_search,
+        ),
     }
     policy_names = {Player.WHITE: white_policy_name, Player.BLACK: black_policy_name}
     rng = random.Random(seed)
@@ -300,8 +426,16 @@ def play_game(
         else DEVELOPMENT_RULES if opening == "development" else CONTROL_RULES
     )
     state = initial_state(rules, sovereign_files=sovereign_files)
-    replay_initial_state = state_to_dict(state) if limit_replays is not None else None
+    record_replay = limit_replays is not None or replays is not None
+    replay_initial_state = state_to_dict(state) if record_replay else None
     replay_actions: list[dict[str, object]] = []
+    game_captures = 0
+    game_moves = 0
+    game_places = 0
+    game_spy_conversions = 0
+    game_artillery_shots = 0
+    game_attrition_events = 0
+    first_height_three_normal_ply: int | None = None
     first_capture: int | None = None
     no_capture = 0
     no_progress = 0
@@ -310,8 +444,18 @@ def play_game(
     positions = Counter({_state_key(state): 1})
     pending_spies: dict[tuple[Player, tuple[int, int]], dict[str, object]] = {}
     first_height_three_seen = {Player.WHITE: False, Player.BLACK: False}
+    height_three_before_neutral_seen = {Player.WHITE: False, Player.BLACK: False}
     first_nonsovereign_move_seen = {Player.WHITE: False, Player.BLACK: False}
+    first_nonsovereign_move_ply: dict[Player, int | None] = {
+        Player.WHITE: None,
+        Player.BLACK: None,
+    }
     first_any_move_seen = {Player.WHITE: False, Player.BLACK: False}
+    first_neutral_move_seen = {Player.WHITE: False, Player.BLACK: False}
+    first_neutral_move_ply: dict[Player, int | None] = {
+        Player.WHITE: None,
+        Player.BLACK: None,
+    }
     first_mover: Player | None = None
     first_move_preplacements = 0
     first_spy_conversion_seen = {Player.WHITE: False, Player.BLACK: False}
@@ -328,6 +472,9 @@ def play_game(
         Player.WHITE: set(),
         Player.BLACK: set(),
     }
+    neutral_gate_trigger_player: Player | None = None
+    neutral_gate_trigger_normal_ply: int | None = None
+    first_post_gate_height_three_player: Player | None = None
 
     for _ in range(max_plies):
         if state.is_over:
@@ -340,6 +487,17 @@ def play_game(
         actions = legal_actions(state)
         if not actions:
             raise AssertionError("non-terminal state has no legal actions")
+
+        if not was_development and not first_neutral_move_seen[player]:
+            height_three_actions = [
+                candidate
+                for candidate in actions
+                if not isinstance(candidate, MoveAction)
+                and len(state.board.get(candidate.destination, ())) == 2
+            ]
+            if height_three_actions:
+                stats["pre_neutral_h3_opportunity_turns"] += 1
+                stats["pre_neutral_h3_legal_actions"] += len(height_three_actions)
 
         for key, data in list(pending_spies.items()):
             owner, square = key
@@ -368,9 +526,33 @@ def play_game(
             stats["griffin_h3_eligible_turns"] += 1
 
         action = policies[player].choose(state, actions, rng)
-        if limit_replays is not None:
+        search_info = getattr(policies[player], "last_search_info", {})
+        if search_info.get("searched", False):
+            stats["search_turns"] += 1
+            stats["search_overrides"] += bool(search_info.get("overrode", False))
+            stats["search_root_candidates_total"] += int(search_info.get("root_candidates", 0))
+            stats["search_reply_nodes_total"] += int(search_info.get("reply_nodes", 0))
+            stats["search_quiescence_nodes_total"] += int(search_info.get("quiescence_nodes", 0))
+            stats[
+                f"search_reason_{search_info.get('reason', 'unknown')}"
+            ] += 1
+        if record_replay:
             replay_actions.append(action_to_dict(action))
-        capture_was_available = any(_is_capture_action(state, candidate) for candidate in actions)
+        capture_actions = [candidate for candidate in actions if _is_capture_action(state, candidate)]
+        capture_was_available = bool(capture_actions)
+        sovereign_capture_was_available = any(
+            isinstance(candidate, MoveAction)
+            and (target := state.board.get(candidate.destination)) is not None
+            and target[-1].kind is PieceType.SOVEREIGN
+            for candidate in capture_actions
+        )
+        available_capture_quality = {
+            label: False
+            for label in ("sovereign_safe", "favorable", "secure", "free", "forcing")
+        }
+        for candidate in capture_actions:
+            for label, qualifies in _capture_quality(state, candidate).items():
+                available_capture_quality[label] |= qualifies
         stats["actions"] += 1
         stats[f"phase_{phase}_actions"] += 1
         before_own_threat = is_sovereign_threatened(state, player)
@@ -382,6 +564,45 @@ def play_game(
         royal_attack = False
         sovereign_capture_action = False
         infiltration_action = False
+        burial_opportunities = [
+            candidate
+            for candidate in actions
+            if valuable_burial_value(state, candidate) > 0.0
+        ]
+        if burial_opportunities:
+            stats["valuable_burial_opportunity_turns"] += 1
+            stats["valuable_burial_legal_actions"] += len(burial_opportunities)
+        chosen_burial_value = valuable_burial_value(state, action)
+        if chosen_burial_value:
+            stats["valuable_burial_actions"] += 1
+            stats["valuable_burial_value"] += chosen_burial_value
+        elif burial_opportunities:
+            stats["valuable_burial_avoided_turns"] += 1
+        royal_interposition_trap = (
+            not isinstance(action, MoveAction)
+            and before_own_threat
+            and is_royal_interposition_trap(state, action)
+        )
+        platform_top_options = [
+            candidate
+            for candidate in actions
+            if not isinstance(candidate, MoveAction)
+            and candidate.piece in {
+                PieceType.DRAGOON,
+                PieceType.CHARIOT,
+                PieceType.GRIFFIN,
+                PieceType.MARSHAL,
+            }
+            and (foundation := state.board.get(candidate.destination)) is not None
+            and foundation[-1].owner is player
+            and all(
+                piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+                for piece in foundation
+            )
+        ]
+        if platform_top_options:
+            stats["platform_option_turns"] += 1
+            stats["platform_top_legal_actions"] += len(platform_top_options)
 
         if not was_development:
             next_normal_ply = state.ply - development_plies + 1
@@ -390,6 +611,13 @@ def play_game(
                     first_any_move_seen[player] = True
                     stats["games_with_first_any_move"] += 1
                     stats["first_any_move_normal_ply_total"] += next_normal_ply
+                    first_stack = state.board[action.source]
+                    first_top = first_stack[-1].kind
+                    stats[f"first_move_piece_{first_top.value}"] += 1
+                    stats[f"first_move_height_{len(first_stack)}"] += 1
+                    stats["first_move_was_sovereign"] += (
+                        first_top is PieceType.SOVEREIGN
+                    )
                 if first_mover is None:
                     first_mover = player
                     stats["first_mover_games"] += 1
@@ -397,6 +625,9 @@ def play_game(
                     stats["first_move_global_preplacements_total"] += first_move_preplacements
                     stats["first_move_immediate"] += first_move_preplacements == 0
                     stats[f"first_mover_color_{player.value}"] += 1
+                    stats["global_first_move_was_sovereign"] += (
+                        state.board[action.source][-1].kind is PieceType.SOVEREIGN
+                    )
             else:
                 if not first_any_move_seen[player]:
                     stats["optional_placements_before_own_first_move"] += 1
@@ -411,6 +642,7 @@ def play_game(
             stats[f"development_file_{action.destination[0]}"] += 1
 
         if isinstance(action, MoveAction):
+            game_moves += 1
             previous_move = last_move_by_player[player]
             if previous_move == (action.destination, action.source):
                 reversible_moves += 1
@@ -423,8 +655,29 @@ def play_game(
                 and not first_nonsovereign_move_seen[player]
             ):
                 first_nonsovereign_move_seen[player] = True
+                first_nonsovereign_move_ply[player] = state.ply - development_plies + 1
                 stats["games_with_first_nonsovereign_move"] += 1
                 stats["first_nonsovereign_move_normal_ply_total"] += state.ply - development_plies + 1
+                stats["first_nonsovereign_move_entered_neutral"] += (
+                    3 <= action.destination[1] <= 5
+                )
+            if 3 <= action.destination[1] <= 5 and not first_neutral_move_seen[player]:
+                first_neutral_move_seen[player] = True
+                first_neutral_move_ply[player] = state.ply - development_plies + 1
+                stats["games_with_first_neutral_move"] += 1
+                stats["first_neutral_move_normal_ply_total"] += state.ply - development_plies + 1
+                stats[f"first_neutral_move_piece_{moving_stack[-1].kind.value}"] += 1
+                stats[f"first_neutral_move_height_{len(moving_stack)}"] += 1
+                stats["first_neutral_move_was_sovereign"] += (
+                    moving_stack[-1].kind is PieceType.SOVEREIGN
+                )
+                source_rank = action.source[1]
+                started_in_home = (
+                    source_rank <= 2
+                    if player is Player.WHITE
+                    else source_rank >= 6
+                )
+                stats["first_neutral_move_from_home"] += started_in_home
             target = state.board.get(action.destination)
             sovereign_capture_action = bool(
                 target and target[-1].kind is PieceType.SOVEREIGN
@@ -462,6 +715,7 @@ def play_game(
                         stats["royal_sovereign_captures"] += 1
                 removed_target = target[:len(moving_stack)] if move_attrition else target
                 if move_attrition:
+                    game_attrition_events += 1
                     stats["move_attrition_events"] += 1
                     for piece in moving_stack:
                         stats[f"own_removed_move_attrition_{piece.kind.value}"] += 1
@@ -485,6 +739,7 @@ def play_game(
                         if target[-1].kind is PieceType.SOVEREIGN:
                             stats[f"griffin_h3_{jump}_sovereign_captures"] += 1
         else:
+            game_places += 1
             stats["placements"] += 1
             stats[f"phase_{phase}_placements"] += 1
             existing = state.board.get(action.destination)
@@ -498,6 +753,7 @@ def play_game(
             else:
                 stats[f"direct_reserve_to_board_{action.piece.value}"] += 1
             if _is_spy_conversion(state, action):
+                game_spy_conversions += 1
                 capture = True
                 stats["spy_conversions"] += 1
                 if not first_spy_conversion_seen[player]:
@@ -535,6 +791,7 @@ def play_game(
                 if action.effect_target is None:
                     stats["artillery_no_fire"] += 1
                 else:
+                    game_artillery_shots += 1
                     capture = True
                     stats["artillery_shots"] += 1
                     if not first_artillery_shot_seen[player]:
@@ -552,6 +809,7 @@ def play_game(
                         else artillery_target
                     )
                     if artillery_attrition:
+                        game_attrition_events += 1
                         stats["artillery_attrition_events"] += 1
                     for piece in removed_target:
                         stats[f"enemy_removed_artillery_{piece.kind.value}"] += 1
@@ -563,6 +821,7 @@ def play_game(
                     stats[f"artillery_range_{distance}_shots"] += 1
 
         if capture:
+            game_captures += 1
             progress = True
             if first_capture is None:
                 first_capture = state.ply + 1
@@ -573,6 +832,22 @@ def play_game(
             stats["capture_opportunities"] += 1
             if not capture:
                 stats["captures_declined"] += 1
+        if sovereign_capture_was_available:
+            stats["sovereign_capture_opportunities"] += 1
+            if not sovereign_capture_action:
+                stats["sovereign_captures_declined"] += 1
+        chosen_capture_quality = _capture_quality(state, action) if capture else {}
+        for label, available in available_capture_quality.items():
+            if not available:
+                continue
+            stats[f"capture_{label}_opportunities"] += 1
+            if _capture_quality_declined(
+                label, available, capture, chosen_capture_quality
+            ):
+                stats[f"capture_{label}_declined"] += 1
+        for label, qualifies in chosen_capture_quality.items():
+            if qualifies:
+                stats[f"capture_{label}_chosen"] += 1
         no_progress = 0 if progress else no_progress + 1
         max_no_capture = max(max_no_capture, no_capture)
         max_no_progress = max(max_no_progress, no_progress)
@@ -580,6 +855,27 @@ def play_game(
         prior_state = state
         state = apply_action(state, action)
         validate_state(state, enforce_inventory=True)
+        if (
+            state.rules.height_three_requires_shared_neutral_presence
+            and neutral_gate_trigger_player is None
+            and not any(prior_state.height_three_unlocked.values())
+            and all(state.height_three_unlocked.values())
+        ):
+            neutral_gate_trigger_player = player
+            neutral_gate_trigger_normal_ply = state.ply - development_plies
+            stats["neutral_gate_triggers"] += 1
+            stats["neutral_gate_trigger_normal_ply_total"] += neutral_gate_trigger_normal_ply
+            if isinstance(action, MoveAction):
+                trigger_kind = prior_state.board[action.source][-1].kind
+                trigger_action = "attack" if action.destination in prior_state.board else "move"
+            else:
+                trigger_kind = action.piece
+                trigger_action = "shoot" if action.effect_target is not None else "place"
+            stats[f"neutral_gate_trigger_action_{trigger_action}"] += 1
+            stats[f"neutral_gate_trigger_piece_{trigger_kind.value}"] += 1
+            trigger_stack = state.board.get(action.destination)
+            if trigger_stack:
+                stats[f"neutral_gate_trigger_height_{len(trigger_stack)}"] += 1
         if state.winner is player:
             if sovereign_capture_action:
                 win_reason = "sovereign_capture"
@@ -635,6 +931,44 @@ def play_game(
             enemy_sovereign_was_threatened=before_enemy_threat,
         )
         stats[f"decision_{reason}"] += 1
+        if (
+            not isinstance(action, MoveAction)
+            and action.piece is PieceType.INFANTRY
+            and (
+                (prior_foundation := prior_state.board.get(action.destination)) is None
+                or (
+                    prior_foundation[-1].owner is player
+                    and all(
+                        piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+                        for piece in prior_foundation
+                    )
+                )
+            )
+        ):
+            stats["infantry_platform_placements"] += 1
+        if (
+            before_own_threat
+            and not isinstance(action, MoveAction)
+            and not is_sovereign_threatened(state, player)
+        ):
+            stats["defensive_interpositions"] += 1
+            stats["royal_interposition_traps"] += royal_interposition_trap
+        if (
+            not isinstance(action, MoveAction)
+            and not before_enemy_threat
+            and is_sovereign_threatened(state, player.opponent)
+        ):
+            stats["immediate_placement_threats"] += 1
+        attack_sources, protected_sources = sovereign_attack_profile(state, player)
+        stats["dual_sovereign_threats"] += attack_sources >= 2
+        stats["protected_sovereign_threats"] += protected_sources > 0
+        if (
+            prior_state.rules.height_three_requires_shared_neutral_presence
+            and not prior_state.in_development
+            and not any(prior_state.height_three_unlocked.values())
+            and not any(state.height_three_unlocked.values())
+        ):
+            stats["neutral_gate_deferrals"] += 1
         if not isinstance(action, MoveAction):
             resulting_stack = state.board.get(action.destination)
             if resulting_stack:
@@ -643,6 +977,27 @@ def play_game(
                 if height == 3:
                     top_kind = resulting_stack[-1].kind
                     stats[f"h3_created_{top_kind.value}"] += 1
+                    if (
+                        neutral_gate_trigger_player is not None
+                        and first_post_gate_height_three_player is None
+                    ):
+                        first_post_gate_height_three_player = player
+                        stats["first_post_gate_h3_builds"] += 1
+                        stats["first_post_gate_h3_by_triggerer"] += (
+                            player is neutral_gate_trigger_player
+                        )
+                        stats["first_post_gate_h3_by_opponent"] += (
+                            player is not neutral_gate_trigger_player
+                        )
+                        if neutral_gate_trigger_normal_ply is not None:
+                            stats["first_post_gate_h3_delay_total"] += (
+                                state.ply - development_plies
+                                - neutral_gate_trigger_normal_ply
+                            )
+                    if not first_neutral_move_seen[player]:
+                        stats["h3_created_before_neutral_move"] += 1
+                        stats[f"h3_before_neutral_top_{top_kind.value}"] += 1
+                        height_three_before_neutral_seen[player] = True
                     for foundation_piece in resulting_stack[:-1]:
                         stats[
                             f"h3_foundation_{top_kind.value}_{foundation_piece.kind.value}"
@@ -687,10 +1042,19 @@ def play_game(
             stats["games_with_height_three"] += 1
             stats["first_height_three_ply_total"] += state.ply
             stats["first_height_three_normal_ply_total"] += state.ply - development_plies
+            if first_height_three_normal_ply is None:
+                first_height_three_normal_ply = state.ply - development_plies
         stats["reserve_sample_count"] += 1
         stats["reserve_pieces_sample_total"] += sum(state.reserves[player].values())
         stats["protected_reserve_sample_total"] += sum(
             state.reserves[player][kind] for kind in RESERVE_PROTECTED_KINDS
+        )
+        stats["buried_premium_sample_total"] += sum(
+            PIECE_VALUES[piece.kind]
+            for stack in state.board.values()
+            if stack[-1].owner is player
+            for piece in stack[:-1]
+            if piece.kind not in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
         )
         if not before_enemy_threat and is_sovereign_threatened(state, player.opponent):
             stats["new_sovereign_threats"] += 1
@@ -773,37 +1137,56 @@ def play_game(
         max_position_repeats=max_repeats,
         limit_diagnostics=limit_diagnostics,
         win_reason=win_reason,
+        captures=game_captures,
+        move_actions=game_moves,
+        place_actions=game_places,
+        spy_conversions=game_spy_conversions,
+        artillery_shots=game_artillery_shots,
+        attrition_events=game_attrition_events,
+        neutral_gate_ply=neutral_gate_trigger_normal_ply,
+        first_height_three_ply=first_height_three_normal_ply,
+        final_reserve_pieces=sum(sum(state.reserves[player].values()) for player in Player),
+        final_board_pieces=sum(len(stack) for stack in state.board.values()),
     )
+    game_id = (
+        f"{rules.id}__{white_policy_name}-vs-{black_policy_name}"
+        f"{'__search' if tactical_search else ''}__seed-{seed}"
+        .replace("@", "-")
+        .replace("/", "-")
+    )
+    replay_document = {
+        "contract_version": 2,
+        "game_id": game_id,
+        "initial_state": replay_initial_state,
+        "actions": replay_actions,
+        "metadata": {
+            "white_policy": white_policy_name,
+            "black_policy": black_policy_name,
+            "seed": seed,
+            "ruleset": rules.id,
+            "tactical_search": tactical_search,
+            "max_plies": max_plies,
+            "plies": state.ply,
+            "outcome": (
+                "ply_limit" if hit_limit else "draw" if state.is_draw
+                else f"{state.winner.value}_win"
+            ),
+            "win_reason": win_reason,
+            "diagnostics": limit_diagnostics,
+        },
+        "annotations": (
+            [{
+                "ply": state.ply,
+                "type": "limit_endgame",
+                "category": limit_diagnostics["category"],
+            }]
+            if hit_limit else []
+        ),
+    }
     if hit_limit and limit_replays is not None:
-        game_id = (
-            f"{rules.id}__{white_policy_name}-vs-{black_policy_name}__seed-{seed}"
-            .replace("@", "-")
-            .replace("/", "-")
-        )
-        limit_replays.append(
-            {
-                "contract_version": 2,
-                "game_id": game_id,
-                "initial_state": replay_initial_state,
-                "actions": replay_actions,
-                "metadata": {
-                    "white_policy": white_policy_name,
-                    "black_policy": black_policy_name,
-                    "seed": seed,
-                    "ruleset": rules.id,
-                    "max_plies": max_plies,
-                    "outcome": "ply_limit",
-                    "diagnostics": limit_diagnostics,
-                },
-                "annotations": [
-                    {
-                        "ply": state.ply,
-                        "type": "limit_endgame",
-                        "category": limit_diagnostics["category"],
-                    }
-                ],
-            }
-        )
+        limit_replays.append(replay_document)
+    if replays is not None:
+        replays.append(replay_document)
     if first_mover is not None:
         first_mover_stats = game_telemetry[policy_names[first_mover]]
         if result.hit_limit:
@@ -814,6 +1197,16 @@ def play_game(
             first_mover_stats["first_mover_wins"] += 1
         else:
             first_mover_stats["first_mover_losses"] += 1
+    if neutral_gate_trigger_player is not None:
+        trigger_stats = game_telemetry[policy_names[neutral_gate_trigger_player]]
+        if result.hit_limit:
+            trigger_stats["neutral_gate_trigger_limits"] += 1
+        elif result.draw or result.winner is None:
+            trigger_stats["neutral_gate_trigger_draws"] += 1
+        elif result.winner is neutral_gate_trigger_player:
+            trigger_stats["neutral_gate_trigger_wins"] += 1
+        else:
+            trigger_stats["neutral_gate_trigger_losses"] += 1
     for policy_name in set(policy_names.values()):
         stats = game_telemetry[policy_name]
         stats["games_observed"] += 1
@@ -828,6 +1221,22 @@ def play_game(
         stats["games_at_limit"] += result.hit_limit
     for player, policy_name in policy_names.items():
         stats = game_telemetry[policy_name]
+        if not first_neutral_move_seen[player]:
+            stats["player_games_without_neutral_move"] += 1
+        if not first_nonsovereign_move_seen[player]:
+            stats["player_games_without_nonsovereign_move"] += 1
+        if height_three_before_neutral_seen[player]:
+            stats["player_games_with_h3_before_neutral_move"] += 1
+        neutral_ply = first_neutral_move_ply[player]
+        nonsovereign_ply = first_nonsovereign_move_ply[player]
+        if neutral_ply is not None and nonsovereign_ply is not None:
+            stats["neutral_vs_nonsovereign_timing_samples"] += 1
+            stats["neutral_minus_nonsovereign_ply_total"] += (
+                neutral_ply - nonsovereign_ply
+            )
+            stats["neutral_no_later_than_nonsovereign"] += (
+                neutral_ply <= nonsovereign_ply
+            )
         if development_piece_ids[player]:
             surviving_ids = {
                 id(piece)
@@ -928,6 +1337,7 @@ def build_report(
     telemetry: dict[str, Counter],
     opening: str = "standard",
     ruleset_id: str | None = None,
+    tactical_search: bool = False,
 ) -> str:
     active_rules = (
         ruleset_by_id(ruleset_id)
@@ -947,7 +1357,13 @@ def build_report(
         "height_rush",
         "sovereign_race",
     }
-    if set(policies) == baseline_policies and seeds >= 25:
+    if active_rules.height_three_requires_shared_neutral_presence:
+        stage_title = (
+            "Shared-neutral height gate opening-size tournament"
+            if seeds >= 25
+            else "Shared-neutral height gate opening-size screen"
+        )
+    elif set(policies) == baseline_policies and seeds >= 25:
         stage_title = "Material-flow and decision baseline tournament"
     elif counter_policies.intersection(policies):
         stage_title = "Stage D height-counter policy tournament"
@@ -966,6 +1382,7 @@ def build_report(
         f"- Maximum plies: {max_plies}",
         f"- Opening: {opening}",
         f"- Ruleset: {active_rules.id}",
+        f"- Shared tactical search: {'enabled' if tactical_search else 'disabled'}",
         f"- Piece catalog: {active_rules.catalog_id} (`{active_rules.catalog_hash}`)",
         "- Every cross-policy seed is played twice with colors swapped.",
         "",
@@ -983,6 +1400,33 @@ def build_report(
             f"{summary['limits']:.0f} | {summary['score_a']:.1%} | "
             f"{summary['mean_plies']:.1f} | {summary['mean_normal_plies']:.1f} |"
         )
+
+    if tactical_search:
+        lines += [
+            "",
+            "## Shallow tactical-search diagnostics",
+            "",
+            "Search is skipped during the opening. An override means the shared two-ply layer selected a different action from the underlying strategic policy after examining bounded opponent replies.",
+            "",
+            "| Policy | Searched turns | Overrides | Override rate | Mean root candidates | Mean reply nodes | Mean tactical extensions | Avoided immediate loss | Avoided tactical loss | Preferred capture | Preferred V pressure |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for name in policies:
+            s = telemetry[name]
+            turns = s["search_turns"]
+            lines.append(
+                f"| {name} | {turns} | {s['search_overrides']} | "
+                f"{_pct(s['search_overrides'], turns)} | "
+                f"{s['search_root_candidates_total'] / turns:.1f} | "
+                f"{s['search_reply_nodes_total'] / turns:.1f} | "
+                f"{s['search_quiescence_nodes_total'] / turns:.1f} | "
+                f"{s['search_reason_avoided_immediate_loss']} | "
+                f"{s['search_reason_avoided_tactical_loss']} | "
+                f"{s['search_reason_preferred_capture']} | "
+                f"{s['search_reason_preferred_sovereign_pressure']} |"
+                if turns
+                else f"| {name} | 0 | 0 | n/a | n/a | n/a | n/a | 0 | 0 | 0 | 0 |"
+            )
 
     lines += [
         "",
@@ -1053,7 +1497,16 @@ def build_report(
             "",
             "## Development-opening diagnostics",
             "",
-            "Sovereigns are fixed at E1/E9 for this first controlled comparison. Each player then makes four kitchen placements; special pieces are unavailable and height three remains locked until that player completes a non-Sovereign MOVE.",
+            (
+                "Sovereigns are fixed at E1/E9 for this controlled comparison. "
+                f"Each player then makes {active_rules.development_placements_per_player} "
+                "kitchen placements; special pieces are unavailable. "
+                + (
+                    "Height three unlocks for both players after any post-opening turn ends with material in neutral territory."
+                    if active_rules.height_three_requires_shared_neutral_presence
+                    else "Height three remains locked until that player completes a non-Sovereign MOVE."
+                )
+            ),
             "",
             "| Policy | Development actions | Infantry | Dragoon | Chariot | Griffin | Marshal | Reinforcement | Height-1 results | Height-2 results | Back rank | Middle rank | Front rank |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -1153,6 +1606,181 @@ def build_report(
                 f"{first_mover_score:.1%} |"
             )
 
+        height_gate_diagnostic_start = len(lines)
+        total_player_games = sum(telemetry[name]["player_games"] for name in policies)
+        total_first_moves = sum(
+            telemetry[name]["games_with_first_any_move"] for name in policies
+        )
+        sovereign_first_moves = sum(
+            telemetry[name]["first_move_was_sovereign"] for name in policies
+        )
+        neutral_entries = sum(
+            telemetry[name]["games_with_first_neutral_move"] for name in policies
+        )
+        pre_neutral_h3_games = sum(
+            telemetry[name]["player_games_with_h3_before_neutral_move"]
+            for name in policies
+        )
+        pre_neutral_h3_created = sum(
+            telemetry[name]["h3_created_before_neutral_move"] for name in policies
+        )
+        nonsovereign_moves = sum(
+            telemetry[name]["games_with_first_nonsovereign_move"]
+            for name in policies
+        )
+        nonsovereign_neutral = sum(
+            telemetry[name]["first_nonsovereign_move_entered_neutral"]
+            for name in policies
+        )
+        first_move_pieces = Counter()
+        neutral_move_pieces = Counter()
+        for kind in PieceType:
+            first_move_pieces[kind] = sum(
+                telemetry[name][f"first_move_piece_{kind.value}"]
+                for name in policies
+            )
+            neutral_move_pieces[kind] = sum(
+                telemetry[name][f"first_neutral_move_piece_{kind.value}"]
+                for name in policies
+            )
+        lines += [
+            "",
+            "### Counterfactual height-3 gate diagnostics",
+            "",
+            "The tournament still uses the current rule: each player unlocks height 3 with their first non-Sovereign MOVE. These measurements estimate how often play would be affected if the unlock instead required that player's first MOVE into neutral territory; they do not simulate the alternative choices a blocked policy would make.",
+            "",
+            f"- First MOVE was made by a Sovereign in **{sovereign_first_moves} / {total_first_moves} player-games ({_pct(sovereign_first_moves, total_first_moves)})**.",
+            f"- The current unlocking non-Sovereign MOVE entered neutral territory in **{nonsovereign_neutral} / {nonsovereign_moves} player-games ({_pct(nonsovereign_neutral, nonsovereign_moves)})**.",
+            f"- A MOVE into neutral territory occurred in **{neutral_entries} / {total_player_games} player-games ({_pct(neutral_entries, total_player_games)})**.",
+            f"- Height 3 was actually created before that neutral entry in **{pre_neutral_h3_games} / {total_player_games} player-games ({_pct(pre_neutral_h3_games, total_player_games)})**, comprising **{pre_neutral_h3_created}** created stacks.",
+            "",
+            "First-MOVE TOP pieces: "
+            + ", ".join(
+                f"{piece_display_name(kind)}={first_move_pieces[kind]}"
+                for kind in PieceType
+                if first_move_pieces[kind]
+            )
+            + ".",
+            "",
+            "First neutral-entry TOP pieces: "
+            + ", ".join(
+                f"{piece_display_name(kind)}={neutral_move_pieces[kind]}"
+                for kind in PieceType
+                if neutral_move_pieces[kind]
+            )
+            + ".",
+            "",
+            "| Policy | Player-games | First MOVE Sovereign | Current unlock entered neutral | Reached neutral by MOVE | Mean neutral-entry ply | Mean neutral-entry delay after current unlock | Height-3 before neutral | Pre-neutral height-3 creations | Pre-neutral height-3 opportunity turns | Never entered neutral |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for name in policies:
+            s = telemetry[name]
+            player_games = s["player_games"]
+            first_moves = s["games_with_first_any_move"]
+            nonsovereign_games = s["games_with_first_nonsovereign_move"]
+            entry_games = s["games_with_first_neutral_move"]
+            timing_samples = s["neutral_vs_nonsovereign_timing_samples"]
+            mean_entry = (
+                f"{s['first_neutral_move_normal_ply_total'] / entry_games:.1f}"
+                if entry_games
+                else "n/a"
+            )
+            mean_delay = (
+                f"{s['neutral_minus_nonsovereign_ply_total'] / timing_samples:.1f}"
+                if timing_samples
+                else "n/a"
+            )
+            lines.append(
+                f"| {name} | {player_games} | "
+                f"{_pct(s['first_move_was_sovereign'], first_moves)} | "
+                f"{_pct(s['first_nonsovereign_move_entered_neutral'], nonsovereign_games)} | "
+                f"{_pct(entry_games, player_games)} | {mean_entry} | {mean_delay} | "
+                f"{_pct(s['player_games_with_h3_before_neutral_move'], player_games)} | "
+                f"{s['h3_created_before_neutral_move']} | "
+                f"{s['pre_neutral_h3_opportunity_turns']} | "
+                f"{s['player_games_without_neutral_move']} |"
+            )
+
+        if active_rules.height_three_requires_shared_neutral_presence:
+            del lines[height_gate_diagnostic_start:]
+            total_games = sum(len(group) for group in paired.values()) + sum(
+                len(group) for group in self_play.values()
+            )
+            total_triggers = sum(telemetry[name]["neutral_gate_triggers"] for name in policies)
+            total_trigger_wins = sum(telemetry[name]["neutral_gate_trigger_wins"] for name in policies)
+            total_trigger_draws = sum(telemetry[name]["neutral_gate_trigger_draws"] for name in policies)
+            total_trigger_limits = sum(telemetry[name]["neutral_gate_trigger_limits"] for name in policies)
+            trigger_score = (
+                total_trigger_wins + 0.5 * (total_trigger_draws + total_trigger_limits)
+            )
+            trigger_ply_total = sum(
+                telemetry[name]["neutral_gate_trigger_normal_ply_total"]
+                for name in policies
+            )
+            total_first_h3 = sum(
+                telemetry[name]["first_post_gate_h3_builds"] for name in policies
+            )
+            total_opponent_first_h3 = sum(
+                telemetry[name]["first_post_gate_h3_by_opponent"] for name in policies
+            )
+            lines += [
+                "",
+                "### Shared neutral-zone height gate",
+                "",
+                (
+                    f"The gate opened in **{total_triggers} / {total_games} games "
+                    f"({_pct(total_triggers, total_games)})**, at mean normal ply "
+                    f"{trigger_ply_total / total_triggers:.1f}. The player who opened "
+                    f"the gate scored **{_pct(trigger_score, total_triggers)}**."
+                    if total_triggers
+                    else f"The gate did not open in any of the {total_games} games."
+                ),
+                (
+                    f"The opponent of the gate opener built the first height-3 stack "
+                    f"in **{total_opponent_first_h3} / {total_first_h3} games "
+                    f"({_pct(total_opponent_first_h3, total_first_h3)})** where a post-gate height-3 stack appeared."
+                    if total_first_h3
+                    else "No post-gate height-3 stacks were built."
+                ),
+                "",
+                "| Policy | Gate openings | Mean gate ply | MOVE | ATTACK | PLACE | SHOOT | Gate-opener score | First post-gate height 3 | Built first as responder | Mean height-3 delay |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+            for name in policies:
+                s = telemetry[name]
+                triggers = s["neutral_gate_triggers"]
+                outcomes = (
+                    s["neutral_gate_trigger_wins"]
+                    + s["neutral_gate_trigger_losses"]
+                    + s["neutral_gate_trigger_draws"]
+                    + s["neutral_gate_trigger_limits"]
+                )
+                score = s["neutral_gate_trigger_wins"] + 0.5 * (
+                    s["neutral_gate_trigger_draws"] + s["neutral_gate_trigger_limits"]
+                )
+                first_h3 = s["first_post_gate_h3_builds"]
+                lines.append(
+                    f"| {name} | {triggers} | "
+                    f"{s['neutral_gate_trigger_normal_ply_total'] / triggers:.1f} | "
+                    f"{s['neutral_gate_trigger_action_move']} | "
+                    f"{s['neutral_gate_trigger_action_attack']} | "
+                    f"{s['neutral_gate_trigger_action_place']} | "
+                    f"{s['neutral_gate_trigger_action_shoot']} | "
+                    f"{_pct(score, outcomes)} | {first_h3} | "
+                    f"{_pct(s['first_post_gate_h3_by_opponent'], first_h3)} | "
+                    f"{s['first_post_gate_h3_delay_total'] / first_h3:.1f} |"
+                    if triggers and first_h3
+                    else f"| {name} | {triggers} | "
+                    f"{s['neutral_gate_trigger_normal_ply_total'] / triggers:.1f} | "
+                    f"{s['neutral_gate_trigger_action_move']} | "
+                    f"{s['neutral_gate_trigger_action_attack']} | "
+                    f"{s['neutral_gate_trigger_action_place']} | "
+                    f"{s['neutral_gate_trigger_action_shoot']} | "
+                    f"{_pct(score, outcomes)} | {first_h3} | n/a | n/a |"
+                    if triggers
+                    else f"| {name} | 0 | n/a | 0 | 0 | 0 | 0 | n/a | {first_h3} | n/a | n/a |"
+                )
+
     lines += [
         "",
         "## Reserve-retention and capture-choice diagnostics",
@@ -1174,6 +1802,72 @@ def build_report(
             f"{opportunities} | {s['captures_declined']} | "
             f"{_pct(s['captures_declined'], opportunities)} |"
         )
+
+    lines += [
+        "",
+        "### Capture-quality audit",
+        "",
+        "These are turn-level opportunities. Sovereign-safe captures do not leave the acting Sovereign threatened. Favorable captures remove at least as much immediate material value as MOVE attrition loses. Secure captures leave the acting stack on its square without an immediate enemy MOVE attack. Free captures satisfy all three tests and exclude SHOOT, which commits scarce artillery from reserve. A free capture is counted as declined only when the player chooses no capture; choosing another available capture is not a decline. Forcing captures threaten the opposing Sovereign. Artillery and Spy placement replies are not counted as immediate recaptures.",
+        "",
+        "| Policy | V-safe available | V-safe declined | Favorable available | Favorable declined | Secure available | Secure declined | Free available | Free declined | Forcing available | Forcing declined |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for name in policies:
+        s = telemetry[name]
+        cells = []
+        for label in ("sovereign_safe", "favorable", "secure", "free", "forcing"):
+            opportunities = s[f"capture_{label}_opportunities"]
+            declined = s[f"capture_{label}_declined"]
+            cells.extend((str(opportunities), f"{declined} ({_pct(declined, opportunities)})"))
+        lines.append(f"| {name} | " + " | ".join(cells) + " |")
+
+    lines += [
+        "",
+        "Immediate Sovereign captures are audited separately because they must outrank every other action, including infiltration.",
+        "",
+        "| Policy | Sovereign capture available | Sovereign captures declined |",
+        "|---|---:|---:|",
+    ]
+    for name in policies:
+        s = telemetry[name]
+        lines.append(
+            f"| {name} | {s['sovereign_capture_opportunities']} | "
+            f"{s['sovereign_captures_declined']} |"
+        )
+
+    competent_policy_names = {
+        "threat_development",
+        "balanced_v2",
+        "height_v2",
+        "spy_v2",
+        "material_v2",
+        "sovereign_pressure_v2",
+        "artillery_reserve_v2",
+    }
+    if any(name.partition("@")[0] in competent_policy_names for name in policies):
+        lines += [
+            "",
+            "## Threat-development diagnostics",
+            "",
+            "A valuable burial places Infantry, Dragoon, Chariot, Griffin, Marshal, artillery, Spy, or Recall above an already-buried non-Infantry/non-Reinforcement piece. Gate deferrals are post-opening turns that deliberately finish without opening the shared neutral gate.",
+            "",
+            "| Policy | Infantry platform placements | Platform-option turns | Valuable-burial opportunities | Burial avoided | Valuable burials | Buried value | Gate deferrals | Defensive interpositions | Royal traps | Placement threats | Dual threats | Protected threats | Mean buried premium |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+        for name in policies:
+            s = telemetry[name]
+            samples = s["reserve_sample_count"]
+            opportunities = s["valuable_burial_opportunity_turns"]
+            lines.append(
+                f"| {name} | {s['infantry_platform_placements']} | "
+                f"{s['platform_option_turns']} | {opportunities} | "
+                f"{_pct(s['valuable_burial_avoided_turns'], opportunities)} | "
+                f"{s['valuable_burial_actions']} | {s['valuable_burial_value']:.1f} | "
+                f"{s['neutral_gate_deferrals']} | {s['defensive_interpositions']} | "
+                f"{s['royal_interposition_traps']} | {s['immediate_placement_threats']} | "
+                f"{s['dual_sovereign_threats']} | {s['protected_sovereign_threats']} | "
+                f"{s['buried_premium_sample_total'] / samples:.2f} |"
+            )
 
     reserve_kinds = [kind for kind in PieceType if kind is not PieceType.SOVEREIGN]
     report_initial_state = initial_state(active_rules)
@@ -1622,7 +2316,7 @@ def build_report(
             else (
                 "This is a screening tournament. Fifty color-swapped games per cross-policy matchup can identify strong candidates for targeted confirmation, but do not establish optimal play or final balance. Ply-limit games count as half a point for each policy in the paired score."
                 if seeds >= 25
-                else "This is a smoke tournament, so ten cross-policy games per matchup are enough to expose configuration errors and large behavioral differences, but not enough to establish balance. Ply-limit games count as half a point for each policy in the paired score."
+                else f"This is a smoke tournament with {2 * seeds} color-swapped games per cross-policy matchup. It can expose configuration errors and large behavioral differences, but cannot establish balance. Ply-limit games count as half a point for each policy in the paired score."
             )
         ),
         "",
@@ -1635,6 +2329,228 @@ def build_report(
     return "\n".join(lines)
 
 
+def _result_key(result: GameResult) -> tuple[str, str, int]:
+    return result.white_policy, result.black_policy, result.seed
+
+
+def _result_summary(result: GameResult) -> dict[str, object]:
+    return {
+        "white_policy": result.white_policy,
+        "black_policy": result.black_policy,
+        "seed": result.seed,
+        "winner": result.winner.value if result.winner else None,
+        "win_reason": result.win_reason,
+        "plies": result.plies,
+        "development_plies": result.development_plies,
+        "captures": result.captures,
+        "move_actions": result.move_actions,
+        "place_actions": result.place_actions,
+        "spy_conversions": result.spy_conversions,
+        "artillery_shots": result.artillery_shots,
+        "attrition_events": result.attrition_events,
+        "neutral_gate_ply": result.neutral_gate_ply,
+        "first_height_three_ply": result.first_height_three_ply,
+        "max_no_capture": result.max_no_capture,
+        "max_no_progress": result.max_no_progress,
+        "max_position_repeats": result.max_position_repeats,
+        "final_reserve_pieces": result.final_reserve_pieces,
+        "final_board_pieces": result.final_board_pieces,
+        "hit_limit": result.hit_limit,
+    }
+
+
+NORMAL_FIELDS = (
+    "plies",
+    "captures",
+    "move_actions",
+    "place_actions",
+    "spy_conversions",
+    "artillery_shots",
+    "attrition_events",
+    "neutral_gate_ply",
+    "first_height_three_ply",
+    "final_reserve_pieces",
+    "final_board_pieces",
+)
+
+
+def _normal_distance(result: GameResult, population: list[GameResult]) -> float:
+    distance = 0.0
+    for field in NORMAL_FIELDS:
+        values = [
+            float(value)
+            for member in population
+            if (value := getattr(member, field)) is not None
+        ]
+        value = getattr(result, field)
+        if not values or value is None:
+            distance += 1.0 if values else 0.0
+            continue
+        center = median(values)
+        deviations = [abs(candidate - center) for candidate in values]
+        scale = max(1.0, median(deviations))
+        distance += abs(float(value) - center) / scale
+
+    win_reasons = Counter(member.win_reason for member in population)
+    common_reason = win_reasons.most_common(1)[0][0]
+    if result.win_reason != common_reason:
+        distance += 1.5
+    return distance
+
+
+def select_curated_games(
+    paired: dict[tuple[str, str], list[GameResult]],
+    self_play: dict[str, list[GameResult]],
+) -> dict[tuple[str, str, int], set[str]]:
+    """Select matchup representatives plus a compact, diverse outlier set."""
+    selected: dict[tuple[str, str, int], set[str]] = defaultdict(set)
+
+    for (policy_a, policy_b), results in paired.items():
+        by_seed: dict[int, list[GameResult]] = defaultdict(list)
+        for result in results:
+            by_seed[result.seed].append(result)
+        complete_pairs = [members for members in by_seed.values() if len(members) == 2]
+        representative_pair = min(
+            complete_pairs,
+            key=lambda members: sum(_normal_distance(member, results) for member in members),
+        )
+        reason = (
+            f"representative: closest-to-median color-swapped pair for "
+            f"{policy_a} vs {policy_b}"
+        )
+        for result in representative_pair:
+            selected[_result_key(result)].add(reason)
+
+    for policy, results in self_play.items():
+        representative = min(results, key=lambda result: _normal_distance(result, results))
+        selected[_result_key(representative)].add(
+            f"representative: closest-to-median {policy} self-play game"
+        )
+
+    all_results = [result for results in paired.values() for result in results]
+    all_results += [result for results in self_play.values() for result in results]
+
+    def add_ranked(
+        reason: str,
+        candidates: list[GameResult],
+        sort_key,
+        count: int = 1,
+        reverse: bool = False,
+    ) -> None:
+        for result in sorted(candidates, key=sort_key, reverse=reverse)[:count]:
+            selected[_result_key(result)].add(f"outlier: {reason}")
+
+    for result in all_results:
+        if result.hit_limit:
+            selected[_result_key(result)].add("outlier: reached the ply limit")
+
+    resolved = [result for result in all_results if not result.hit_limit]
+    add_ranked("shortest resolved game", resolved, lambda result: result.plies, 2)
+    add_ranked("longest resolved game", resolved, lambda result: result.plies, 2, True)
+
+    gate_games = [result for result in all_results if result.neutral_gate_ply is not None]
+    add_ranked("earliest neutral gate", gate_games, lambda result: result.neutral_gate_ply)
+    add_ranked("latest neutral gate", gate_games, lambda result: result.neutral_gate_ply, reverse=True)
+
+    height_games = [result for result in all_results if result.first_height_three_ply is not None]
+    add_ranked("earliest height-3 stack", height_games, lambda result: result.first_height_three_ply)
+    add_ranked("latest height-3 stack", height_games, lambda result: result.first_height_three_ply, reverse=True)
+
+    add_ranked("most captures", all_results, lambda result: result.captures, 2, True)
+    add_ranked("most attrition events", all_results, lambda result: result.attrition_events, 2, True)
+    add_ranked("most artillery shots", all_results, lambda result: result.artillery_shots, reverse=True)
+    add_ranked("most Spy conversions", all_results, lambda result: result.spy_conversions, reverse=True)
+    add_ranked("longest quiet sequence", all_results, lambda result: result.max_no_progress, 2, True)
+    add_ranked("most reserve remaining", all_results, lambda result: result.final_reserve_pieces, reverse=True)
+    add_ranked("least material remaining on board", all_results, lambda result: result.final_board_pieces)
+
+    upset_candidates: list[GameResult] = []
+    for (policy_a, policy_b), results in paired.items():
+        # Results swap colors, so identify the weaker policy rather than a weaker color.
+        policy_wins = Counter()
+        for result in results:
+            if result.winner is Player.WHITE:
+                policy_wins[result.white_policy] += 1
+            elif result.winner is Player.BLACK:
+                policy_wins[result.black_policy] += 1
+        if policy_wins[policy_a] == policy_wins[policy_b]:
+            continue
+        weaker = policy_a if policy_wins[policy_a] < policy_wins[policy_b] else policy_b
+        upset_candidates.extend(
+            result for result in results
+            if (
+                (result.winner is Player.WHITE and result.white_policy == weaker)
+                or (result.winner is Player.BLACK and result.black_policy == weaker)
+            )
+        )
+    add_ranked("fast win by the matchup's less-successful policy", upset_candidates, lambda result: result.plies, 3)
+    return selected
+
+
+def write_curated_replays(
+    output_dir: Path,
+    selected: dict[tuple[str, str, int], set[str]],
+    results: dict[tuple[str, str, int], GameResult],
+    *,
+    max_plies: int,
+    opening: str,
+    ruleset_id: str | None,
+    tactical_search: bool,
+) -> None:
+    entries = []
+    for key in sorted(selected):
+        original = results[key]
+        replay_sink: list[dict[str, object]] = []
+        reproduced = play_game(
+            original.white_policy,
+            original.black_policy,
+            original.seed,
+            max_plies,
+            defaultdict(Counter),
+            opening,
+            ruleset_id=ruleset_id,
+            replays=replay_sink,
+            tactical_search=tactical_search,
+        )
+        if reproduced.plies != original.plies or reproduced.winner is not original.winner:
+            raise AssertionError(f"curated replay did not reproduce tournament result: {key}")
+        replay = replay_sink[0]
+        reasons = sorted(selected[key])
+        replay["metadata"]["selection_reasons"] = reasons
+        replay["metadata"]["summary"] = _result_summary(reproduced)
+        category = (
+            "limits" if reproduced.hit_limit
+            else "outliers" if any(reason.startswith("outlier:") for reason in reasons)
+            else "representative"
+        )
+        category_dir = output_dir / category
+        category_dir.mkdir(parents=True, exist_ok=True)
+        path = category_dir / f"{replay['game_id']}.json"
+        path.write_text(json.dumps(replay, indent=2) + "\n", encoding="utf-8")
+        entries.append({
+            "file": str(path.relative_to(output_dir)),
+            "game_id": replay["game_id"],
+            "category": category,
+            "selection_reasons": reasons,
+            "summary": _result_summary(reproduced),
+        })
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "contract_version": 1,
+        "ruleset": ruleset_id,
+        "opening": opening,
+        "max_plies": max_plies,
+        "tactical_search": tactical_search,
+        "selected_games": len(entries),
+        "categories": dict(Counter(entry["category"] for entry in entries)),
+        "games": entries,
+    }
+    (output_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def run_tournament(
     policies: tuple[str, ...],
     seeds: int,
@@ -1643,6 +2559,8 @@ def run_tournament(
     opening: str = "standard",
     ruleset_id: str | None = None,
     limit_replay_dir: Path | None = None,
+    curated_replay_dir: Path | None = None,
+    tactical_search: bool = False,
 ) -> tuple[str, dict[str, Counter]]:
     # A named ruleset is authoritative; keep opening for legacy callers.
     if ruleset_id is not None:
@@ -1659,6 +2577,7 @@ def run_tournament(
                     a, b, seed, max_plies, telemetry, opening,
                     ruleset_id=ruleset_id,
                     limit_replays=limit_replays,
+                    tactical_search=tactical_search,
                 )
             )
             results.append(
@@ -1666,6 +2585,7 @@ def run_tournament(
                     b, a, seed, max_plies, telemetry, opening,
                     ruleset_id=ruleset_id,
                     limit_replays=limit_replays,
+                    tactical_search=tactical_search,
                 )
             )
         paired[(a, b)] = results
@@ -1677,6 +2597,7 @@ def run_tournament(
                 name, name, seed_start + offset, max_plies, telemetry, opening,
                 ruleset_id=ruleset_id,
                 limit_replays=limit_replays,
+                tactical_search=tactical_search,
             )
             for offset in range(seeds)
         ]
@@ -1685,10 +2606,26 @@ def run_tournament(
         for replay in limit_replays:
             path = limit_replay_dir / f"{replay['game_id']}.json"
             path.write_text(json.dumps(replay, indent=2) + "\n", encoding="utf-8")
+    if curated_replay_dir is not None:
+        selected = select_curated_games(paired, self_play)
+        result_index = {
+            _result_key(result): result
+            for results in [*paired.values(), *self_play.values()]
+            for result in results
+        }
+        write_curated_replays(
+            curated_replay_dir,
+            selected,
+            result_index,
+            max_plies=max_plies,
+            opening=opening,
+            ruleset_id=ruleset_id,
+            tactical_search=tactical_search,
+        )
     return (
         build_report(
             policies, seeds, seed_start, max_plies, paired, self_play,
-            telemetry, opening, ruleset_id,
+            telemetry, opening, ruleset_id, tactical_search,
         ),
         telemetry,
     )
@@ -1714,10 +2651,24 @@ def main() -> None:
         type=Path,
         help="Save every ply-limit game as a replay JSON file in this directory",
     )
+    parser.add_argument(
+        "--curated-replay-dir",
+        type=Path,
+        help="Save representative and outlier replay samples plus a manifest",
+    )
+    parser.add_argument(
+        "--tactical-search",
+        action="store_true",
+        help="Wrap every policy in bounded two-ply reply-aware search",
+    )
     args = parser.parse_args()
     report, _ = run_tournament(
         tuple(args.policies), args.seeds, args.seed_start, args.max_plies,
-        args.opening, args.ruleset, args.limit_replay_dir,
+        args.opening,
+        args.ruleset,
+        args.limit_replay_dir,
+        args.curated_replay_dir,
+        args.tactical_search,
     )
     if args.output:
         args.output.write_text(report + "\n", encoding="utf-8")

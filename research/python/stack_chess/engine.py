@@ -106,6 +106,7 @@ class Ruleset:
     development_home_only: bool = True
     development_specials_prohibited: bool = True
     height_three_requires_nonsovereign_move: bool = False
+    height_three_requires_shared_neutral_presence: bool = False
     infiltration_victory: bool = False
     move_vs_taller: str = "illegal"
     artillery_vs_taller: str = "illegal"
@@ -117,6 +118,10 @@ ATTRITION_CONTROL_RULES = Ruleset(**ruleset_values("attrition-control-v2"))
 ATTRITION_DEVELOPMENT_RULES = Ruleset(**ruleset_values("attrition-development-v2"))
 DEVELOPMENT_INFILTRATION_RULES = Ruleset(**ruleset_values("development-infiltration-v1"))
 ATTRITION_DEVELOPMENT_INFILTRATION_RULES = Ruleset(**ruleset_values("attrition-development-infiltration-v1"))
+NEUTRAL_GATE_OPENING_4_RULES = Ruleset(**ruleset_values("attrition-neutral-gate-opening-4-v1"))
+NEUTRAL_GATE_OPENING_5_RULES = Ruleset(**ruleset_values("attrition-neutral-gate-opening-5-v1"))
+NEUTRAL_GATE_OPENING_6_RULES = Ruleset(**ruleset_values("attrition-neutral-gate-opening-6-v1"))
+NEUTRAL_GATE_OPENING_7_RULES = Ruleset(**ruleset_values("attrition-neutral-gate-opening-7-v1"))
 RULESETS_BY_ID = {
     rules.id: rules
     for rules in (
@@ -126,6 +131,10 @@ RULESETS_BY_ID = {
         ATTRITION_DEVELOPMENT_RULES,
         DEVELOPMENT_INFILTRATION_RULES,
         ATTRITION_DEVELOPMENT_INFILTRATION_RULES,
+        NEUTRAL_GATE_OPENING_4_RULES,
+        NEUTRAL_GATE_OPENING_5_RULES,
+        NEUTRAL_GATE_OPENING_6_RULES,
+        NEUTRAL_GATE_OPENING_7_RULES,
     )
 }
 
@@ -215,7 +224,10 @@ def initial_state(
             Player.WHITE: ((f"{FILES[white_sovereign_file]}1", PieceType.SOVEREIGN),),
             Player.BLACK: ((f"{FILES[black_sovereign_file]}9", PieceType.SOVEREIGN),),
         }
-        initially_unlocked = not rules.height_three_requires_nonsovereign_move
+        initially_unlocked = not (
+            rules.height_three_requires_nonsovereign_move
+            or rules.height_three_requires_shared_neutral_presence
+        )
         state.height_three_unlocked = {
             Player.WHITE: initially_unlocked,
             Player.BLACK: initially_unlocked,
@@ -615,10 +627,16 @@ def _apply_legal_action(
                 result.board[action.destination] = moving
         else:
             result.board[action.destination] = moving
-        if moving[-1].kind is not PieceType.SOVEREIGN:
+        if (
+            state.rules.height_three_requires_nonsovereign_move
+            and moving[-1].kind is not PieceType.SOVEREIGN
+        ):
             result.height_three_unlocked[player] = True
-        elif state.rules.infiltration_victory and action.destination[1] == (
-            BOARD_SIZE - 1 if player is Player.WHITE else 0
+        if (
+            state.rules.infiltration_victory
+            and moving[-1].kind is PieceType.SOVEREIGN
+            and action.destination[1]
+            == (BOARD_SIZE - 1 if player is Player.WHITE else 0)
         ):
             result.winner = player
     elif isinstance(action, RecallAction):
@@ -632,6 +650,16 @@ def _apply_legal_action(
 
     if was_development:
         result.development_placements[player] += 1
+
+    if (
+        not was_development
+        and state.rules.height_three_requires_shared_neutral_presence
+        and any(3 <= square[1] <= 5 for square in result.board)
+    ):
+        result.height_three_unlocked = {
+            Player.WHITE: True,
+            Player.BLACK: True,
+        }
 
     result.ply += 1
     if result.winner is None:
@@ -676,6 +704,47 @@ def is_sovereign_threatened(state: GameState, player: Player) -> bool:
         sovereign_square in _movement_destinations(state, source)
         for source, stack in state.board.items()
         if stack[-1].owner is player.opponent
+    )
+
+
+def stack_controls_square(state: GameState, source: Square, target: Square) -> bool:
+    """Return whether a mobile stack projects its movement line onto ``target``.
+
+    Unlike a legal MOVE query, this treats a friendly occupied target as
+    controlled. That distinction lets policies recognize protected attackers,
+    batteries, and unsafe Royal Attacks without changing the game rules.
+    """
+    if source == target or source not in state.board or not _on_board(target):
+        return False
+    stack = state.board[source]
+    top = stack[-1]
+    height = len(stack)
+    movement = PIECE_CONFIG[top.kind]["movement"]
+    if movement["mode"] == "immobile":
+        return False
+    dx = target[0] - source[0]
+    dy = target[1] - source[1]
+    if movement["mode"] == "leap":
+        return (abs(dx), abs(dy)) in {
+            tuple(vector)
+            for vector in movement["vectors_by_height"][str(height)]
+        }
+    directions = _directions(movement["direction_mode"], top.owner)
+    direction = next(
+        (
+            (step_x, step_y, distance)
+            for step_x, step_y in directions
+            for distance in range(1, _movement_range(movement["range_mode"], height) + 1)
+            if (step_x * distance, step_y * distance) == (dx, dy)
+        ),
+        None,
+    )
+    if direction is None:
+        return False
+    step_x, step_y, distance = direction
+    return all(
+        (source[0] + step_x * step, source[1] + step_y * step) not in state.board
+        for step in range(1, distance)
     )
 
 

@@ -128,15 +128,19 @@ static func _validate_rulesets() -> void:
 	var keys := [
 		"development_opening", "development_placements_per_player",
 		"development_home_only", "development_specials_prohibited",
-		"height_three_requires_nonsovereign_move", "infiltration_victory", "move_vs_taller",
+		"height_three_requires_nonsovereign_move",
+		"height_three_requires_shared_neutral_presence",
+		"infiltration_victory", "move_vs_taller",
 		"artillery_vs_taller",
 	]
 	for ruleset_id in _ruleset_document.get("rulesets", {}):
 		var values: Dictionary = _ruleset_document.rulesets[ruleset_id]
 		_check_exact_keys(values, keys, "ruleset.%s" % ruleset_id)
-		for key in ["development_opening", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move", "infiltration_victory"]:
+		for key in ["development_opening", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move", "height_three_requires_shared_neutral_presence", "infiltration_victory"]:
 			if not values.get(key) is bool:
 				_configuration_errors.append("%s must be boolean in %s" % [key, ruleset_id])
+		if values.get("height_three_requires_nonsovereign_move", false) and values.get("height_three_requires_shared_neutral_presence", false):
+			_configuration_errors.append("Multiple height-three unlock rules in %s" % ruleset_id)
 		if values.get("move_vs_taller") not in ["illegal", "mutual_bottom_attrition"]:
 			_configuration_errors.append("Unsupported move combat mode in %s" % ruleset_id)
 		if values.get("artillery_vs_taller") not in ["illegal", "target_bottom_attrition"]:
@@ -256,6 +260,10 @@ static func development_infiltration_ruleset() -> Dictionary:
 
 static func attrition_development_infiltration_ruleset() -> Dictionary:
 	return ruleset("attrition-development-infiltration-v1")
+
+
+static func current_beta_ruleset() -> Dictionary:
+	return ruleset("attrition-neutral-gate-opening-4-v1")
 
 
 static func opponent(player: String) -> String:

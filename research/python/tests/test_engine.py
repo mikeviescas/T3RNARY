@@ -6,6 +6,7 @@ from stack_chess.engine import (
     ATTRITION_CONTROL_RULES,
     ATTRITION_DEVELOPMENT_INFILTRATION_RULES,
     DEVELOPMENT_RULES,
+    NEUTRAL_GATE_OPENING_4_RULES,
     GameState,
     MoveAction,
     Piece,
@@ -18,6 +19,7 @@ from stack_chess.engine import (
     is_sovereign_threatened,
     legal_actions,
     parse_square as sq,
+    stack_controls_square,
     validate_state,
 )
 
@@ -101,8 +103,46 @@ class InitialStateTests(unittest.TestCase):
         self.assertTrue(state.height_three_unlocked[P.WHITE])
         self.assertIn(PlaceAction(T.MARSHAL, sq("A1")), legal_actions(state))
 
+    def test_neutral_presence_unlocks_height_three_for_both_players(self):
+        state = initial_state(NEUTRAL_GATE_OPENING_4_RULES)
+        state.development_placements = {P.WHITE: 4, P.BLACK: 4}
+        state.board[sq("A1")] = (pc(P.WHITE, T.INFANTRY), pc(P.WHITE, T.CHARIOT))
+        state.board[sq("A9")] = (pc(P.BLACK, T.INFANTRY), pc(P.BLACK, T.CHARIOT))
+        state.reserves[P.WHITE][T.INFANTRY] -= 1
+        state.reserves[P.WHITE][T.CHARIOT] -= 1
+        state.reserves[P.BLACK][T.INFANTRY] -= 1
+        state.reserves[P.BLACK][T.CHARIOT] -= 1
+
+        self.assertFalse(state.height_three_unlocked[P.WHITE])
+        self.assertFalse(state.height_three_unlocked[P.BLACK])
+        self.assertNotIn(PlaceAction(T.MARSHAL, sq("A1")), legal_actions(state))
+
+        # A post-opening placement in home territory does not open the gate.
+        state = apply_action(state, PlaceAction(T.INFANTRY, sq("B1")))
+        self.assertFalse(state.height_three_unlocked[P.WHITE])
+        self.assertFalse(state.height_three_unlocked[P.BLACK])
+
+        # Either player's material ending a turn in neutral territory opens it
+        # for both players; the opponent receives the first opportunity to use it.
+        state = apply_action(state, PlaceAction(T.INFANTRY, sq("D4")))
+        self.assertTrue(state.height_three_unlocked[P.WHITE])
+        self.assertTrue(state.height_three_unlocked[P.BLACK])
+        self.assertEqual(state.turn, P.WHITE)
+        self.assertIn(PlaceAction(T.MARSHAL, sq("A1")), legal_actions(state))
+
 
 class MovementTests(unittest.TestCase):
+
+    def test_stack_control_includes_friendly_target_but_stops_at_blocker(self):
+        state = state_with({
+            "E1": (pc(P.WHITE, T.SOVEREIGN),),
+            "E3": (pc(P.WHITE, T.CHARIOT),),
+            "E6": (pc(P.WHITE, T.DRAGOON),),
+            "E9": (pc(P.BLACK, T.SOVEREIGN),),
+        })
+        self.assertTrue(stack_controls_square(state, sq("E3"), sq("E6")))
+        self.assertFalse(stack_controls_square(state, sq("E3"), sq("E7")))
+
     def test_infiltration_wins_immediately_on_enemy_back_row(self):
         state = state_with(
             {
@@ -124,6 +164,19 @@ class MovementTests(unittest.TestCase):
             {"E8": [pc(P.WHITE, T.SOVEREIGN)], "E1": [pc(P.BLACK, T.SOVEREIGN)]},
             rules=ATTRITION_CONTROL_RULES,
         )
+        result = apply_action(state, MoveAction(sq("E8"), sq("E9")))
+        self.assertIsNone(result.winner)
+
+    def test_only_sovereign_can_win_by_infiltration(self):
+        state = state_with(
+            {
+                "E8": [pc(P.WHITE, T.INFANTRY)],
+                "E1": [pc(P.WHITE, T.SOVEREIGN)],
+                "A9": [pc(P.BLACK, T.SOVEREIGN)],
+            },
+            rules=NEUTRAL_GATE_OPENING_4_RULES,
+        )
+        state.development_placements = {P.WHITE: 4, P.BLACK: 4}
         result = apply_action(state, MoveAction(sq("E8"), sq("E9")))
         self.assertIsNone(result.winner)
 

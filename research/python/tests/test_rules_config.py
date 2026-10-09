@@ -8,6 +8,10 @@ from stack_chess.engine import (
     CONTROL_RULES,
     DEVELOPMENT_RULES,
     DEVELOPMENT_INFILTRATION_RULES,
+    NEUTRAL_GATE_OPENING_4_RULES,
+    NEUTRAL_GATE_OPENING_5_RULES,
+    NEUTRAL_GATE_OPENING_6_RULES,
+    NEUTRAL_GATE_OPENING_7_RULES,
     PIECE_CONFIG,
     STARTING_COUNTS,
     PieceType,
@@ -44,6 +48,20 @@ class SharedRuleConfigurationTests(unittest.TestCase):
         self.assertFalse(DEVELOPMENT_RULES.infiltration_victory)
         self.assertTrue(DEVELOPMENT_INFILTRATION_RULES.infiltration_victory)
         self.assertTrue(ATTRITION_DEVELOPMENT_INFILTRATION_RULES.infiltration_victory)
+
+    def test_shared_neutral_gate_opening_presets(self):
+        rulesets = (
+            NEUTRAL_GATE_OPENING_4_RULES,
+            NEUTRAL_GATE_OPENING_5_RULES,
+            NEUTRAL_GATE_OPENING_6_RULES,
+            NEUTRAL_GATE_OPENING_7_RULES,
+        )
+        self.assertEqual(
+            [rules.development_placements_per_player for rules in rulesets],
+            [4, 5, 6, 7],
+        )
+        self.assertTrue(all(rules.height_three_requires_shared_neutral_presence for rules in rulesets))
+        self.assertTrue(all(not rules.height_three_requires_nonsovereign_move for rules in rulesets))
 
 
 if __name__ == "__main__":

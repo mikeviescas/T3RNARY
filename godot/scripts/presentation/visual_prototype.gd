@@ -5,6 +5,7 @@ const Tokens = preload("res://scripts/presentation/token_renderer.gd")
 const Icons = preload("res://scripts/presentation/piece_icon_renderer.gd")
 const Codec = preload("res://scripts/core/ternary_codec.gd")
 const GameEngine = preload("res://scripts/core/ternary_engine.gd")
+const OpponentAI = preload("res://scripts/core/ternary_ai.gd")
 const Rules = preload("res://scripts/core/ternary_rules.gd")
 
 const BOARD_DIMENSION := 9
@@ -15,18 +16,26 @@ const PIECE_ORDER := [
 
 var board_rect := Rect2()
 var hovered_square := ""
-var selected_square := "E5"
-var sample_position := {}
-var view_mode := "demo"
+var selected_square := ""
+var view_mode := "play"
 var game_state := {}
 var manual_states: Array = []
 var manual_actions: Array = []
 var manual_redo_states: Array = []
 var manual_redo_actions: Array = []
+var manual_redo_ai_annotations: Array = []
 var manual_initial_state := {}
 var human_game_id := ""
 var human_game_path := ""
 var human_recording_enabled := false
+var ai_enabled := false
+var ai_player := Rules.BLACK
+var ai_busy := false
+var ai_controller = OpponentAI.new()
+var ai_thread: Thread
+var ai_request_checksum := ""
+var ai_annotations: Array = []
+var last_ai_decision: Dictionary = {}
 var selected_piece_kind := ""
 var selected_recall_kind := ""
 var pending_artillery_actions: Array = []
@@ -43,15 +52,34 @@ var left_mode_rects := {}
 var reserve_rects := {}
 var right_control_rects := {}
 var recall_kind_rects := {}
+var inspector_collapsed := false
+var notation_collapsed := false
+var right_split_ratio := 0.38
+var right_split_track := Rect2()
+var right_workspace_rect := Rect2()
+var dragging_right_split := false
+var notation_copy_feedback_until := 0
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	human_recording_enabled = true
-	_build_sample_position()
 	_build_file_dialog()
 	resized.connect(queue_redraw)
 	queue_redraw()
+
+
+func _process(_delta: float) -> void:
+	if ai_thread != null and ai_thread.is_started() and not ai_thread.is_alive():
+		var decision = ai_thread.wait_to_finish()
+		ai_thread = null
+		_complete_threaded_ai_turn(decision)
+
+
+func _exit_tree() -> void:
+	if ai_thread != null and ai_thread.is_started():
+		ai_thread.wait_to_finish()
+		ai_thread = null
 
 
 func _build_file_dialog() -> void:
@@ -67,37 +95,11 @@ func _build_file_dialog() -> void:
 	add_child(file_dialog)
 
 
-func _build_sample_position() -> void:
-	sample_position = {
-		"A9": _stack("black", ["sovereign"]),
-		"C8": _stack("black", ["infantry", "chariot"]),
-		"E8": _stack("black", ["dragoon"]),
-		"G8": _stack("black", ["infantry", "ballista"]),
-		"I8": _stack("black", ["marshal"]),
-		"B7": _stack("black", ["infantry"]),
-		"D7": _stack("black", ["reinforcement", "griffin"]),
-		"H7": _stack("black", ["infantry", "spy"]),
-		"C6": _stack("black", ["infantry", "dragoon", "griffin"]),
-		"G6": _stack("black", ["trebuchet"]),
-		"E5": _stack("white", ["reinforcement", "infantry", "marshal"]),
-		"B4": _stack("white", ["infantry", "chariot"]),
-		"F4": _stack("white", ["dragoon"]),
-		"H4": _stack("white", ["infantry", "spy"]),
-		"C3": _stack("white", ["infantry"]),
-		"E3": _stack("white", ["reinforcement", "griffin"]),
-		"G3": _stack("white", ["infantry", "ballista"]),
-		"A1": _stack("white", ["sovereign"]),
-		"I2": _stack("white", ["recall"]),
-	}
-
-
 func _stack(owner: String, kinds: Array) -> Dictionary:
 	return {"owner": owner, "kinds": kinds}
 
 
 func _position_data() -> Dictionary:
-	if view_mode == "demo":
-		return sample_position
 	if view_mode == "play" and game_state.is_empty():
 		return setup_position
 	var result := {}
@@ -119,9 +121,13 @@ func _start_new_game() -> void:
 	manual_actions.clear()
 	manual_redo_states.clear()
 	manual_redo_actions.clear()
+	manual_redo_ai_annotations.clear()
 	manual_initial_state = {}
 	human_game_id = ""
 	human_game_path = ""
+	ai_busy = false
+	ai_annotations.clear()
+	last_ai_decision = {}
 	setup_white_file = -1
 	setup_position = {}
 	_clear_action_selection()
@@ -131,15 +137,17 @@ func _start_new_game() -> void:
 
 
 func _finish_sovereign_setup(black_file: int) -> void:
-	game_state = GameEngine.initial_state(Rules.attrition_development_infiltration_ruleset(), Vector2i(setup_white_file, black_file))
+	game_state = GameEngine.initial_state(Rules.current_beta_ruleset(), Vector2i(setup_white_file, black_file))
 	manual_states = [game_state.duplicate(true)]
 	manual_initial_state = game_state.duplicate(true)
 	manual_redo_states.clear()
 	manual_redo_actions.clear()
+	manual_redo_ai_annotations.clear()
 	_begin_human_recording()
 	setup_position = {}
 	selected_square = ""
 	queue_redraw()
+	_queue_ai_turn()
 
 
 func _clear_action_selection() -> void:
@@ -154,27 +162,104 @@ func _legal_actions() -> Array:
 	return GameEngine.legal_actions(game_state)
 
 
-func _apply_manual_action(action: Dictionary) -> void:
+func _apply_manual_action(action: Dictionary, ai_decision := {}) -> void:
 	var next_state := GameEngine.apply_action(game_state, action)
 	if next_state.is_empty():
 		return
 	game_state = next_state
 	manual_actions.append(Codec.normalize_action(action))
 	manual_states.append(game_state.duplicate(true))
+	if not ai_decision.is_empty():
+		last_ai_decision = ai_decision.duplicate(true)
+		var annotation := ai_decision.duplicate(true)
+		annotation["ply"] = manual_actions.size()
+		annotation.erase("action")
+		ai_annotations.append(annotation)
 	manual_redo_actions.clear()
 	manual_redo_states.clear()
+	manual_redo_ai_annotations.clear()
 	_save_human_game()
 	selected_square = ""
 	_clear_action_selection()
 	queue_redraw()
+	_queue_ai_turn()
+
+
+func _is_ai_turn() -> bool:
+	return ai_enabled and not game_state.is_empty() and not GameEngine.is_over(game_state) and str(game_state.turn) == ai_player
+
+
+func _queue_ai_turn() -> void:
+	if ai_enabled and game_state.is_empty() and setup_white_file >= 0 and not ai_busy:
+		ai_busy = true
+		queue_redraw()
+		call_deferred("_perform_ai_sovereign_setup")
+		return
+	if _is_ai_turn() and not ai_busy:
+		ai_busy = true
+		ai_request_checksum = Codec.state_checksum(game_state)
+		queue_redraw()
+		ai_thread = Thread.new()
+		var snapshot := game_state.duplicate(true)
+		if ai_thread.start(_compute_ai_decision.bind(snapshot)) != OK:
+			ai_thread = null
+			call_deferred("_perform_ai_turn")
+
+
+func _compute_ai_decision(snapshot: Dictionary) -> Dictionary:
+	var worker_ai = OpponentAI.new()
+	return worker_ai.choose_action(snapshot)
+
+
+func _complete_threaded_ai_turn(decision: Variant) -> void:
+	if not decision is Dictionary or not _is_ai_turn() or Codec.state_checksum(game_state) != ai_request_checksum:
+		ai_busy = false
+		queue_redraw()
+		return
+	ai_busy = false
+	_apply_manual_action(decision.action, decision)
+
+
+func _perform_ai_sovereign_setup() -> void:
+	if not ai_enabled or not game_state.is_empty() or setup_white_file < 0:
+		ai_busy = false
+		queue_redraw()
+		return
+	# A rotationally mirrored start is deterministic and does not privilege a
+	# particular board edge while the opening-placement policy is still young.
+	var black_file := Rules.board_size() - 1 - setup_white_file
+	ai_busy = false
+	_finish_sovereign_setup(black_file)
+
+
+func _perform_ai_turn() -> void:
+	if not _is_ai_turn():
+		ai_busy = false
+		queue_redraw()
+		return
+	var decision: Dictionary = ai_controller.choose_action(game_state)
+	if decision.is_empty():
+		ai_busy = false
+		replay_error = "The computer could not find a legal action."
+		queue_redraw()
+		return
+	ai_busy = false
+	_apply_manual_action(decision.action, decision)
 
 
 func _undo_manual_action() -> void:
 	if view_mode != "play" or manual_states.size() <= 1:
 		return
-	manual_redo_states.append(manual_states.pop_back())
-	if not manual_actions.is_empty():
-		manual_redo_actions.append(manual_actions.pop_back())
+	var undo_count := 1
+	if ai_enabled and manual_states.size() > 2 and not ai_annotations.is_empty() and int(ai_annotations[-1].get("ply", 0)) == manual_actions.size():
+		undo_count = 2
+	for _step in range(undo_count):
+		manual_redo_states.append(manual_states.pop_back())
+		var old_ply := manual_actions.size()
+		if not manual_actions.is_empty():
+			manual_redo_actions.append(manual_actions.pop_back())
+		if not ai_annotations.is_empty() and int(ai_annotations[-1].get("ply", 0)) == old_ply:
+			manual_redo_ai_annotations.append(ai_annotations.pop_back())
 	game_state = manual_states[-1].duplicate(true)
 	_save_human_game()
 	selected_square = ""
@@ -185,8 +270,13 @@ func _undo_manual_action() -> void:
 func _redo_manual_action() -> void:
 	if view_mode != "play" or manual_redo_states.is_empty() or manual_redo_actions.is_empty():
 		return
-	manual_actions.append(manual_redo_actions.pop_back())
-	manual_states.append(manual_redo_states.pop_back())
+	var redo_count := mini(2, manual_redo_actions.size()) if ai_enabled else 1
+	for _step in range(redo_count):
+		manual_actions.append(manual_redo_actions.pop_back())
+		manual_states.append(manual_redo_states.pop_back())
+		var restored_ply := manual_actions.size()
+		if not manual_redo_ai_annotations.is_empty() and int(manual_redo_ai_annotations[-1].get("ply", 0)) == restored_ply:
+			ai_annotations.append(manual_redo_ai_annotations.pop_back())
 	game_state = manual_states[-1].duplicate(true)
 	_save_human_game()
 	selected_square = ""
@@ -229,14 +319,14 @@ func _human_replay_document() -> Dictionary:
 		"initial_state": manual_initial_state.duplicate(true),
 		"actions": manual_actions.duplicate(true),
 		"metadata": {
-			"source": "human_hotseat",
+			"source": "human_vs_ai" if ai_enabled else "human_hotseat",
 			"ruleset": str(manual_initial_state.get("rules", {}).get("id", "")),
 			"outcome": outcome,
 			"completed": not game_state.is_empty() and GameEngine.is_over(game_state),
 			"plies": manual_actions.size(),
 			"updated_unix": int(Time.get_unix_time_from_system()),
 		},
-		"annotations": [],
+		"annotations": ai_annotations.duplicate(true),
 	}
 
 
@@ -305,6 +395,7 @@ func _draw() -> void:
 	_draw_board()
 	_draw_action_markers()
 	_draw_position()
+	_draw_game_over_overlay()
 	_draw_right_panel()
 
 
@@ -317,6 +408,56 @@ func _draw_table() -> void:
 	for index in range(34):
 		var y := fmod(float(index * 83), maxf(1.0, size.y))
 		draw_line(Vector2(0.0, y), Vector2(size.x, y + 13.0), Color(0.65, 0.54, 0.40, 0.018), 1.0)
+
+
+func _draw_game_over_overlay() -> void:
+	if game_state.is_empty() or not GameEngine.is_over(game_state):
+		return
+	var font := ThemeDB.fallback_font
+	draw_rect(board_rect, Color(0.015, 0.018, 0.020, 0.50))
+	var banner_width := minf(board_rect.size.x * 0.68, 610.0)
+	var banner_height := minf(board_rect.size.y * 0.19, 150.0)
+	var banner := Rect2(
+		board_rect.get_center() - Vector2(banner_width, banner_height) * 0.5,
+		Vector2(banner_width, banner_height)
+	)
+	draw_rect(banner, Color(Palette.PANEL, 0.97))
+	draw_rect(banner, Palette.BRASS_LIGHT, false, 3.0)
+	draw_line(banner.position + Vector2(18.0, 13.0), Vector2(banner.end.x - 18.0, banner.position.y + 13.0), Palette.BRASS, 1.0)
+	draw_line(Vector2(banner.position.x + 18.0, banner.end.y - 13.0), banner.end - Vector2(18.0, 13.0), Palette.BRASS, 1.0)
+	var headline := "DRAW"
+	if game_state.get("winner") != null:
+		headline = "%s VICTORY" % str(game_state.winner).to_upper()
+	draw_string(font, banner.position + Vector2(0.0, banner_height * 0.48), headline, HORIZONTAL_ALIGNMENT_CENTER, banner_width, 32, Palette.TEXT)
+	draw_string(font, banner.position + Vector2(0.0, banner_height * 0.72), _game_end_method(), HORIZONTAL_ALIGNMENT_CENTER, banner_width, 14, Palette.BRASS_LIGHT)
+
+
+func _game_end_method() -> String:
+	if game_state.is_empty() or not GameEngine.is_over(game_state):
+		return ""
+	if bool(game_state.get("is_draw", false)):
+		return "NO LEGAL ACTIONS"
+	var action: Dictionary = {}
+	var before: Dictionary = {}
+	if view_mode == "play" and not manual_actions.is_empty() and manual_states.size() >= 2:
+		action = Codec.normalize_action(manual_actions[-1])
+		before = manual_states[-2]
+	elif view_mode == "replay" and replay_index > 0 and replay_index <= replay_actions.size():
+		action = Codec.normalize_action(replay_actions[replay_index - 1])
+		before = replay_states[replay_index - 1]
+	if action.is_empty() or str(action.get("type", "")) != "move":
+		return "GAME COMPLETE"
+	var destination := str(action.get("destination", ""))
+	var target: Array = before.get("board", {}).get(destination, [])
+	if not target.is_empty() and str(target[-1].kind) == Rules.SOVEREIGN:
+		return "SOVEREIGN CAPTURE"
+	var source: Array = before.get("board", {}).get(str(action.get("source", "")), [])
+	if not source.is_empty() and str(source[-1].kind) == Rules.SOVEREIGN:
+		var destination_rank := Rules.square_to_xy(destination).y
+		var winner := str(game_state.get("winner", ""))
+		if destination_rank == (Rules.board_size() - 1 if winner == Rules.WHITE else 0):
+			return "CONQUER"
+	return "VICTORY"
 
 
 func _calculate_board_rect() -> void:
@@ -336,24 +477,19 @@ func _draw_board() -> void:
 	draw_rect(board_rect.grow(6.0), Palette.FRAME_MID)
 	var cell := board_rect.size.x / BOARD_DIMENSION
 	for row in range(BOARD_DIMENSION):
-		var tint := Palette.territory_tint(row)
 		for column in range(BOARD_DIMENSION):
 			var square_rect := Rect2(board_rect.position + Vector2(column, row) * cell, Vector2(cell, cell))
 			var base := Palette.LIGHT_SQUARE if (column + row) % 2 == 0 else Palette.DARK_SQUARE
-			var strength := 0.30 if row <= 2 else (0.27 if row >= 6 else 0.24)
-			var surface := base.lerp(tint, strength)
-			draw_rect(square_rect, surface)
+			if row >= 3 and row <= 5:
+				base = Palette.NEUTRAL_LIGHT_SQUARE if (column + row) % 2 == 0 else Palette.NEUTRAL_DARK_SQUARE
+			draw_rect(square_rect, base)
 			_draw_square_grain(square_rect, column, row, base)
 			draw_rect(square_rect, Palette.GRID_LINE, false, maxf(1.0, cell * 0.018))
-			_draw_corner_inlay(square_rect, tint, cell)
-	_draw_zone_watermarks(cell)
 
-	# Territory boundaries are constructed into the board, not UI overlays.
+	# Two orientation-neutral lines are the board's only territory markings.
 	for boundary_row in [3, 6]:
 		var y: float = board_rect.position.y + cell * int(boundary_row)
-		draw_line(Vector2(board_rect.position.x, y - 3.0), Vector2(board_rect.end.x, y - 3.0), Color(0.08, 0.07, 0.055, 0.88), 3.0)
-		draw_line(Vector2(board_rect.position.x, y + 2.0), Vector2(board_rect.end.x, y + 2.0), Palette.BRASS_LIGHT, 2.0)
-	_draw_territory_rails(cell)
+		draw_line(Vector2(board_rect.position.x, y), Vector2(board_rect.end.x, y), Palette.NEUTRAL_BOUNDARY, maxf(3.0, cell * 0.045), true)
 	_draw_coordinates(cell)
 
 
@@ -365,43 +501,6 @@ func _draw_square_grain(rect: Rect2, column: int, row: int, base: Color) -> void
 		var start := rect.position + Vector2(rect.size.x * x_offset, rect.size.y * y_offset)
 		var length := rect.size.x * (0.16 + float(seed_value % 11) / 80.0)
 		draw_line(start, start + Vector2(length, 1.5), Color(base.lightened(0.35), 0.075), 1.0)
-
-
-func _draw_corner_inlay(rect: Rect2, tint: Color, cell: float) -> void:
-	var radius := maxf(2.5, cell * 0.045)
-	draw_rect(Rect2(rect.position - Vector2(radius, radius), Vector2(radius * 2.0, radius * 2.0)), Palette.FRAME_DARK)
-	draw_rect(Rect2(rect.position - Vector2(radius * 0.62, radius * 0.62), Vector2(radius * 1.24, radius * 1.24)), tint.lightened(0.25))
-
-
-func _draw_territory_rails(cell: float) -> void:
-	var font := ThemeDB.fallback_font
-	var rail_x := board_rect.position.x - 18.0
-	var labels := ["BLACK HOME", "NEUTRAL FIELD", "WHITE HOME"]
-	var colors := [Palette.BLACK_TERRITORY, Palette.NEUTRAL_TERRITORY, Palette.WHITE_TERRITORY]
-	for zone in range(3):
-		var zone_rect := Rect2(Vector2(rail_x - 4.0, board_rect.position.y + cell * zone * 3.0 + 8.0), Vector2(8.0, cell * 3.0 - 16.0))
-		var right_zone_rect := Rect2(Vector2(board_rect.end.x + 27.0, zone_rect.position.y), zone_rect.size)
-		for marker_rect in [zone_rect, right_zone_rect]:
-			draw_rect(marker_rect, colors[zone])
-			draw_rect(marker_rect, colors[zone].lightened(0.35), false, 1.0)
-		var label_position := Vector2(board_rect.position.x + cell * 0.16, board_rect.position.y + cell * (zone * 3.0 + 0.28))
-		draw_string(font, label_position, labels[zone], HORIZONTAL_ALIGNMENT_LEFT, -1.0, maxi(9, roundi(cell * 0.12)), Color(0.98, 0.95, 0.88, 0.50))
-
-
-func _draw_zone_watermarks(cell: float) -> void:
-	var font := ThemeDB.fallback_font
-	var labels := ["BLACK HOME", "NEUTRAL FIELD", "WHITE HOME"]
-	for zone in range(3):
-		var baseline := board_rect.position.y + cell * (float(zone) * 3.0 + 1.72)
-		draw_string(
-			font,
-			Vector2(board_rect.position.x, baseline),
-			labels[zone],
-			HORIZONTAL_ALIGNMENT_CENTER,
-			board_rect.size.x,
-			maxi(20, roundi(cell * 0.31)),
-			Color(0.98, 0.95, 0.88, 0.115)
-		)
 
 
 func _draw_coordinates(cell: float) -> void:
@@ -434,8 +533,6 @@ func _draw_action_markers() -> void:
 
 
 func _current_action_markers() -> Dictionary:
-	if view_mode == "demo":
-		return legal_move_markers(selected_square)
 	if view_mode != "play" or game_state.is_empty() or GameEngine.is_over(game_state):
 		return {}
 	var position := _position_data()
@@ -458,44 +555,6 @@ func _current_action_markers() -> Dictionary:
 				continue
 			markers[str(action.destination)] = "move"
 	return markers
-
-
-func legal_move_markers(square: String) -> Dictionary:
-	if not sample_position.has(square):
-		return {}
-	var selected: Dictionary = sample_position[square]
-	var state := _sample_engine_state(str(selected.owner))
-	var markers := {}
-	for action in GameEngine.legal_actions(state):
-		if str(action.get("type", "")) != "move" or str(action.get("source", "")) != square:
-			continue
-		var destination := str(action.destination)
-		markers[destination] = "capture" if sample_position.has(destination) else "move"
-	return markers
-
-
-func _sample_engine_state(turn: String) -> Dictionary:
-	var board := {}
-	for square_value in sample_position:
-		var square := str(square_value)
-		var data: Dictionary = sample_position[square]
-		var stack: Array = []
-		for kind in data.kinds:
-			stack.append({"owner": str(data.owner), "kind": str(kind)})
-		board[square] = stack
-	return Codec.normalize_state({
-		"contract_version": Rules.CONTRACT_VERSION,
-		"rules": Rules.control_ruleset(),
-		"board": board,
-		"reserves": {"white": {}, "black": {}},
-		"discards": {"white": {}, "black": {}},
-		"turn": turn,
-		"winner": null,
-		"is_draw": false,
-		"ply": 0,
-		"development_placements": {"white": 0, "black": 0},
-		"height_three_unlocked": {"white": true, "black": true},
-	})
 
 
 func _draw_position() -> void:
@@ -523,9 +582,9 @@ func _draw_left_panel() -> void:
 	draw_string(font, rect.position + Vector2(19.0, 61.0), "PLAY & REPLAY SIMULATOR", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Palette.BRASS_LIGHT)
 	draw_line(rect.position + Vector2(18.0, 76.0), Vector2(rect.end.x - 18.0, rect.position.y + 76.0), Palette.PANEL_LINE, 1.0)
 	left_mode_rects.clear()
-	var tabs := [["demo", "DEMO"], ["play", "PLAY"], ["replay", "REPLAY"]]
+	var tabs := [["play", "PLAY"], ["replay", "REPLAY"]]
 	var tab_gap := 5.0
-	var tab_width := (rect.size.x - 36.0 - tab_gap * 2.0) / 3.0
+	var tab_width := (rect.size.x - 36.0 - tab_gap) / 2.0
 	for index in range(tabs.size()):
 		var tab_rect := Rect2(rect.position + Vector2(18.0 + float(index) * (tab_width + tab_gap), 86.0), Vector2(tab_width, 29.0))
 		left_mode_rects[tabs[index][0]] = tab_rect
@@ -542,8 +601,6 @@ func _draw_left_panel() -> void:
 	elif view_mode == "replay":
 		var replay_name := str(replay_document.get("game_id", "No replay loaded"))
 		draw_string(font, rect.position + Vector2(18.0, 136.0), replay_name, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 11, Palette.TEXT_MUTED)
-	else:
-		draw_string(font, rect.position + Vector2(18.0, 136.0), "Select a mode to begin.", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 11, Palette.TEXT_MUTED)
 	for index in range(PIECE_ORDER.size()):
 		var column := index % 2
 		var row := index / 2
@@ -608,9 +665,13 @@ func _draw_reserve_pile(center: Vector2, radius: float, owner: String, kind: Str
 
 func _play_status_text() -> String:
 	if game_state.is_empty():
+		if ai_enabled and setup_white_file >= 0:
+			return "Computer is placing the Black Sovereign."
 		return "Place White Sovereign on rank 1." if setup_white_file < 0 else "Place Black Sovereign on rank 9."
 	if GameEngine.is_over(game_state):
 		return "DRAW" if game_state.is_draw else "%s WINS" % str(game_state.winner).to_upper()
+	if _is_ai_turn():
+		return "COMPUTER THINKING"
 	var phase := "OPENING" if GameEngine.in_development(game_state) else "OPEN PLAY"
 	return "%s · %s TO ACT" % [phase, str(game_state.turn).to_upper()]
 
@@ -645,10 +706,13 @@ func _draw_right_panel() -> void:
 		right_control_rects["redo"] = redo_rect
 		_draw_button(undo_rect, "UNDO", false)
 		_draw_button(redo_rect, "REDO", false)
+		var opponent_rect := Rect2(Vector2(rect.position.x + 18.0, controls_y + 37.0), Vector2(rect.size.x - 36.0, 28.0))
+		right_control_rects["toggle_ai"] = opponent_rect
+		_draw_button(opponent_rect, "OPPONENT: COMPUTER" if ai_enabled else "OPPONENT: HUMAN", ai_enabled)
 		if not human_game_path.is_empty():
-			draw_string(font, Vector2(rect.position.x + 18.0, controls_y + 51.0), "AUTO-RECORDED · %s" % human_game_id, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 9, Palette.TEXT_MUTED)
+			draw_string(font, Vector2(rect.position.x + 18.0, controls_y + 80.0), "AUTO-RECORDED · %s" % human_game_id, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 9, Palette.TEXT_MUTED)
 		if not pending_artillery_actions.is_empty():
-			var no_shoot_rect := Rect2(Vector2(rect.position.x + 18.0, controls_y + 60.0), Vector2(rect.size.x - 36.0, 34.0))
+			var no_shoot_rect := Rect2(Vector2(rect.position.x + 18.0, controls_y + 89.0), Vector2(rect.size.x - 36.0, 34.0))
 			right_control_rects["no_shoot"] = no_shoot_rect
 			_draw_button(no_shoot_rect, "PLACE WITHOUT SHOOTING", true)
 	elif view_mode == "replay":
@@ -673,43 +737,118 @@ func _draw_right_panel() -> void:
 		_draw_recall_choices(rect, divider_y)
 		return
 	draw_line(Vector2(rect.position.x + 18.0, divider_y), Vector2(rect.end.x - 18.0, divider_y), Palette.PANEL_LINE, 1.0)
-	draw_string(font, rect.position + Vector2(18.0, 211.0), "STACK INSPECTOR", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Palette.BRASS_LIGHT)
-	draw_string(font, rect.position + Vector2(18.0, 244.0), selected_square if not selected.is_empty() else "—", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 28, Palette.TEXT)
+	right_workspace_rect = Rect2(
+		Vector2(rect.position.x + 12.0, divider_y + 8.0),
+		Vector2(rect.size.x - 24.0, rect.end.y - divider_y - 20.0)
+	)
+	_draw_sidebar_panes(right_workspace_rect, selected)
+
+
+func _draw_sidebar_panes(workspace: Rect2, selected: Dictionary) -> void:
+	const HEADER_HEIGHT := 30.0
+	const SPLITTER_HEIGHT := 10.0
+	const MIN_EXPANDED_HEIGHT := 112.0
+	right_split_track = Rect2()
+	var inspector_rect: Rect2
+	var notation_rect: Rect2
+	if inspector_collapsed and notation_collapsed:
+		inspector_rect = Rect2(workspace.position, Vector2(workspace.size.x, HEADER_HEIGHT))
+		notation_rect = Rect2(Vector2(workspace.position.x, inspector_rect.end.y + 4.0), Vector2(workspace.size.x, HEADER_HEIGHT))
+	elif inspector_collapsed:
+		inspector_rect = Rect2(workspace.position, Vector2(workspace.size.x, HEADER_HEIGHT))
+		notation_rect = Rect2(Vector2(workspace.position.x, inspector_rect.end.y + 4.0), Vector2(workspace.size.x, workspace.end.y - inspector_rect.end.y - 4.0))
+	elif notation_collapsed:
+		notation_rect = Rect2(Vector2(workspace.position.x, workspace.end.y - HEADER_HEIGHT), Vector2(workspace.size.x, HEADER_HEIGHT))
+		inspector_rect = Rect2(workspace.position, Vector2(workspace.size.x, notation_rect.position.y - workspace.position.y - 4.0))
+	else:
+		var usable := workspace.size.y - SPLITTER_HEIGHT
+		var inspector_height := clampf(usable * right_split_ratio, MIN_EXPANDED_HEIGHT, usable - MIN_EXPANDED_HEIGHT)
+		inspector_rect = Rect2(workspace.position, Vector2(workspace.size.x, inspector_height))
+		right_split_track = Rect2(Vector2(workspace.position.x, inspector_rect.end.y), Vector2(workspace.size.x, SPLITTER_HEIGHT))
+		notation_rect = Rect2(Vector2(workspace.position.x, right_split_track.end.y), Vector2(workspace.size.x, workspace.end.y - right_split_track.end.y))
+		draw_rect(right_split_track, Color(0.0, 0.0, 0.0, 0.22))
+		draw_line(Vector2(right_split_track.position.x + 34.0, right_split_track.get_center().y), Vector2(right_split_track.end.x - 34.0, right_split_track.get_center().y), Palette.PANEL_LINE, 2.0)
+	_draw_stack_inspector_pane(inspector_rect, selected)
+	_draw_notation_pane(notation_rect)
+
+
+func _draw_pane_header(rect: Rect2, title: String, collapsed: bool, control_name: String) -> Rect2:
+	var font := ThemeDB.fallback_font
+	draw_rect(rect, Color(0.0, 0.0, 0.0, 0.18))
+	draw_line(rect.position, Vector2(rect.end.x, rect.position.y), Palette.PANEL_LINE, 1.0)
+	draw_string(font, rect.position + Vector2(7.0, 20.0), title, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 42.0, 11, Palette.BRASS_LIGHT)
+	var toggle := Rect2(Vector2(rect.end.x - 28.0, rect.position.y + 4.0), Vector2(24.0, 22.0))
+	right_control_rects[control_name] = toggle
+	_draw_button(toggle, "+" if collapsed else "−", false)
+	return toggle
+
+
+func _draw_stack_inspector_pane(rect: Rect2, selected: Dictionary) -> void:
+	var header := Rect2(rect.position, Vector2(rect.size.x, minf(30.0, rect.size.y)))
+	_draw_pane_header(header, "STACK INSPECTOR", inspector_collapsed, "toggle_inspector")
+	if inspector_collapsed or rect.size.y <= 34.0:
+		return
+	var font := ThemeDB.fallback_font
+	var content := Rect2(Vector2(rect.position.x + 7.0, header.end.y + 5.0), Vector2(rect.size.x - 14.0, rect.end.y - header.end.y - 9.0))
 	if selected.is_empty():
-		draw_string(font, rect.position + Vector2(18.0, 274.0), _selection_help_text(), HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 12, Palette.TEXT_MUTED)
+		draw_string(font, content.position + Vector2(0.0, 17.0), "—", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20, Palette.TEXT)
+		draw_string(font, content.position + Vector2(0.0, 42.0), _selection_help_text(), HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 11, Palette.TEXT_MUTED)
 		if not replay_error.is_empty():
-			draw_string(font, rect.position + Vector2(18.0, 315.0), replay_error, HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 11, Palette.CAPTURE)
+			draw_string(font, content.position + Vector2(0.0, 66.0), replay_error, HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 10, Palette.CAPTURE)
 		return
 	var kinds: Array = selected.kinds
 	var owner := str(selected.owner)
-	var radius := minf(29.0, rect.size.x * 0.14)
-	var start_y := rect.position.y + 300.0
+	draw_string(font, content.position + Vector2(0.0, 17.0), "%s · HEIGHT %d" % [selected_square, kinds.size()], HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 15, Palette.TEXT)
+	var available_height := maxf(58.0, content.size.y - 27.0)
+	var radius := minf(23.0, maxf(16.0, available_height / 4.8))
+	var overlap_step := radius * 1.18
+	var stack_height := radius * 2.0 + overlap_step * float(kinds.size() - 1)
+	var first_center_y := content.position.y + 29.0 + maxf(radius, (available_height - stack_height) * 0.5 + radius)
+	var center_x := content.position.x + radius + 4.0
+	var label_x := center_x + radius + 12.0
 	for reverse_index in range(kinds.size()):
 		var index := kinds.size() - 1 - reverse_index
-		var center := Vector2(rect.get_center().x, start_y + float(reverse_index) * 88.0)
+		var center := Vector2(center_x, first_center_y + float(reverse_index) * overlap_step)
 		Tokens.draw_token(self, center, radius, owner, str(kinds[index]), true, index == kinds.size() - 1)
 		var role := "TOP" if index == kinds.size() - 1 else "BURIED"
 		var label := "%s · %s" % [_display_name(str(kinds[index])).to_upper(), role]
-		draw_string(font, center + Vector2(-rect.size.x * 0.42, radius + 23.0), label, HORIZONTAL_ALIGNMENT_CENTER, rect.size.x * 0.84, 10, Palette.TEXT_MUTED if role == "BURIED" else Palette.SELECTED)
-	if kinds.size() > 1:
-		for index in range(kinds.size() - 1):
-			var y := start_y + 45.0 + float(index) * 88.0
-			draw_line(Vector2(rect.get_center().x, y), Vector2(rect.get_center().x, y + 13.0), Palette.PANEL_LINE, 2.0)
-	var info_y := rect.end.y - 94.0
-	draw_line(Vector2(rect.position.x + 18.0, info_y - 18.0), Vector2(rect.end.x - 18.0, info_y - 18.0), Palette.PANEL_LINE, 1.0)
-	draw_string(font, Vector2(rect.position.x + 18.0, info_y + 3.0), "HEIGHT %d" % kinds.size(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 15, Palette.TEXT)
-	draw_string(font, Vector2(rect.position.x + 18.0, info_y + 29.0), "TOP piece controls the stack.", HORIZONTAL_ALIGNMENT_LEFT, rect.size.x - 36.0, 11, Palette.TEXT_MUTED)
+		draw_string(font, Vector2(label_x, center.y + 4.0), label, HORIZONTAL_ALIGNMENT_LEFT, maxf(40.0, content.end.x - label_x), 9, Palette.SELECTED if role == "TOP" else Palette.TEXT_MUTED)
+
+
+func _draw_notation_pane(rect: Rect2) -> void:
+	var header := Rect2(rect.position, Vector2(rect.size.x, minf(30.0, rect.size.y)))
+	var toggle := _draw_pane_header(header, "GAME NOTATION", notation_collapsed, "toggle_notation")
+	var copy_rect := Rect2(Vector2(toggle.position.x - 55.0, header.position.y + 4.0), Vector2(49.0, 22.0))
+	right_control_rects["copy_notation"] = copy_rect
+	_draw_button(copy_rect, "COPIED" if Time.get_ticks_msec() < notation_copy_feedback_until else "COPY", Time.get_ticks_msec() < notation_copy_feedback_until)
+	if notation_collapsed or rect.size.y <= 34.0:
+		return
+	var font := ThemeDB.fallback_font
+	var entries := _notation_entries()
+	var content := Rect2(Vector2(rect.position.x + 7.0, header.end.y + 5.0), Vector2(rect.size.x - 14.0, rect.end.y - header.end.y - 8.0))
+	var current_actions := _notation_action_count()
+	draw_string(font, content.position + Vector2(0.0, 13.0), "THROUGH PLY %d" % current_actions, HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 9, Palette.TEXT_MUTED)
+	if entries.is_empty():
+		draw_string(font, content.position + Vector2(0.0, 37.0), "No game notation yet.", HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 11, Palette.TEXT_MUTED)
+		return
+	var line_height := 17.0
+	var available_lines := maxi(1, int((content.size.y - 21.0) / line_height))
+	var first := maxi(0, entries.size() - available_lines)
+	var y := content.position.y + 31.0
+	for index in range(first, entries.size()):
+		draw_string(font, Vector2(content.position.x, y), str(entries[index]), HORIZONTAL_ALIGNMENT_LEFT, content.size.x, 10, Palette.TEXT)
+		y += line_height
 
 
 func _right_status_text() -> String:
-	if view_mode == "demo":
-		return "VISUAL STUDY"
 	if view_mode == "replay":
 		return "TOURNAMENT REVIEW"
 	if game_state.is_empty():
 		return "SOVEREIGN SETUP"
 	if GameEngine.is_over(game_state):
 		return "GAME COMPLETE"
+	if _is_ai_turn():
+		return "BLACK · COMPUTER THINKING"
 	return "%s · PLY %d" % [str(game_state.turn).to_upper(), int(game_state.ply)]
 
 
@@ -740,6 +879,132 @@ func _action_text(action: Dictionary) -> String:
 	if normalized.get("effect_target") != null:
 		text += " → %s" % normalized.effect_target
 	return text
+
+
+func _notation_action_count() -> int:
+	if view_mode == "play":
+		return manual_actions.size()
+	if view_mode == "replay":
+		return mini(replay_index, replay_actions.size())
+	return 0
+
+
+func _notation_source() -> Dictionary:
+	if view_mode == "play":
+		if manual_initial_state.is_empty():
+			return {"initial_state": {}, "actions": [], "states": [], "game_id": "New game"}
+		return {
+			"initial_state": manual_initial_state,
+			"actions": manual_actions,
+			"states": manual_states,
+			"game_id": human_game_id,
+		}
+	if view_mode == "replay" and not replay_states.is_empty():
+		var count := mini(replay_index, replay_actions.size())
+		return {
+			"initial_state": replay_states[0],
+			"actions": replay_actions.slice(0, count),
+			"states": replay_states.slice(0, count + 1),
+			"game_id": str(replay_document.get("game_id", "Replay")),
+		}
+	return {"initial_state": {}, "actions": [], "states": [], "game_id": ""}
+
+
+func _sovereign_square_in_state(state: Dictionary, owner: String) -> String:
+	for square_value in state.get("board", {}):
+		var square := str(square_value)
+		var stack: Array = state.board[square]
+		if not stack.is_empty() and str(stack[-1].owner) == owner and str(stack[-1].kind) == Rules.SOVEREIGN:
+			return square
+	return ""
+
+
+func _notation_entries() -> Array:
+	var source := _notation_source()
+	var initial: Dictionary = source.initial_state
+	if initial.is_empty():
+		return []
+	var entries: Array = []
+	var white_square := _sovereign_square_in_state(initial, Rules.WHITE)
+	var black_square := _sovereign_square_in_state(initial, Rules.BLACK)
+	if not white_square.is_empty():
+		entries.append("1W P-V@%s" % white_square)
+	if not black_square.is_empty():
+		entries.append("1B P-V@%s" % black_square)
+	var turn_numbers := {Rules.WHITE: 2, Rules.BLACK: 2}
+	var actions: Array = source.actions
+	var states: Array = source.states
+	for index in range(actions.size()):
+		if index + 1 >= states.size():
+			break
+		var before: Dictionary = states[index]
+		var after: Dictionary = states[index + 1]
+		var owner := str(before.get("turn", Rules.WHITE))
+		var owner_code := "W" if owner == Rules.WHITE else "B"
+		entries.append("%d%s %s" % [int(turn_numbers[owner]), owner_code, _action_notation(actions[index], before, after)])
+		turn_numbers[owner] = int(turn_numbers[owner]) + 1
+	return entries
+
+
+func _action_notation(action: Dictionary, before: Dictionary, after: Dictionary) -> String:
+	var normalized := Codec.normalize_action(action)
+	var result := ""
+	if normalized.type == "move":
+		var stack: Array = before.get("board", {}).get(str(normalized.source), [])
+		var piece_code := "?"
+		if not stack.is_empty():
+			piece_code = Rules.piece_notation(str(stack[-1].kind))
+		var separator := "x" if before.get("board", {}).has(str(normalized.destination)) else "-"
+		result = "M-%s:%s%s%s" % [piece_code, normalized.source, separator, normalized.destination]
+	else:
+		var destination := str(normalized.destination)
+		var target = normalized.get("effect_target")
+		if normalized.type == "recall":
+			result = "P-Rc(%s)@%s" % [Rules.piece_notation(str(normalized.piece)), destination]
+		elif str(normalized.piece) == Rules.SPY and before.get("board", {}).has(destination):
+			result = "P-Spx%s" % destination
+		else:
+			result = "P-%s@%s" % [Rules.piece_notation(str(normalized.piece)), destination]
+		if target != null:
+			result += "x%s" % str(target)
+	var actor := str(before.get("turn", Rules.WHITE))
+	if str(after.get("winner", "")) == actor:
+		result += "#"
+	return result
+
+
+func _notation_copy_text() -> String:
+	var source := _notation_source()
+	var entries := _notation_entries()
+	var initial: Dictionary = source.initial_state
+	var ruleset := str(initial.get("rules", {}).get("id", "unknown")) if not initial.is_empty() else "unknown"
+	var lines: Array[String] = [
+		"T3RNARY GAME NOTATION",
+		"Game: %s" % str(source.game_id),
+		"Ruleset: %s" % ruleset,
+		"Through recorded ply: %d" % _notation_action_count(),
+		"",
+	]
+	for entry in entries:
+		lines.append(str(entry))
+	return "\n".join(lines)
+
+
+func _copy_notation_to_clipboard() -> void:
+	DisplayServer.clipboard_set(_notation_copy_text())
+	notation_copy_feedback_until = Time.get_ticks_msec() + 1200
+	queue_redraw()
+
+
+func _update_right_split(mouse_y: float) -> void:
+	if right_workspace_rect.size.y <= 0.0:
+		return
+	right_split_ratio = clampf(
+		(mouse_y - right_workspace_rect.position.y) / right_workspace_rect.size.y,
+		0.2,
+		0.8
+	)
+	queue_redraw()
 
 
 func _draw_recall_choices(rect: Rect2, start_y: float) -> void:
@@ -780,12 +1045,21 @@ func _draw_button(rect: Rect2, label: String, active: bool) -> void:
 
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
+		if dragging_right_split:
+			_update_right_split(event.position.y)
+			return
 		var new_hover := _square_at(event.position)
 		if new_hover != hovered_square:
 			hovered_square = new_hover
 			queue_redraw()
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		_handle_click(event.position)
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			if not right_split_track.has_point(event.position):
+				_handle_click(event.position)
+			else:
+				dragging_right_split = true
+		else:
+			dragging_right_split = false
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			selected_square = ""
@@ -812,11 +1086,7 @@ func _gui_input(event: InputEvent) -> void:
 func _handle_click(position: Vector2) -> void:
 	for mode in left_mode_rects:
 		if left_mode_rects[mode].has_point(position):
-			if mode == "demo":
-				view_mode = "demo"
-				selected_square = "E5"
-				_clear_action_selection()
-			elif mode == "play":
+			if mode == "play":
 				_start_new_game()
 			else:
 				view_mode = "replay"
@@ -854,6 +1124,12 @@ func _handle_right_control(control: String) -> void:
 			_undo_manual_action()
 		"redo":
 			_redo_manual_action()
+		"toggle_ai":
+			ai_enabled = not ai_enabled
+			_clear_action_selection()
+			_save_human_game()
+			queue_redraw()
+			_queue_ai_turn()
 		"no_shoot":
 			_apply_artillery_without_shooting()
 		"open_replay":
@@ -866,10 +1142,18 @@ func _handle_right_control(control: String) -> void:
 			_set_replay_index(replay_index + 1)
 		"last":
 			_set_replay_index(replay_states.size() - 1)
+		"toggle_inspector":
+			inspector_collapsed = not inspector_collapsed
+			queue_redraw()
+		"toggle_notation":
+			notation_collapsed = not notation_collapsed
+			queue_redraw()
+		"copy_notation":
+			_copy_notation_to_clipboard()
 
 
 func _select_reserve_piece(kind: String) -> void:
-	if view_mode != "play" or game_state.is_empty() or GameEngine.is_over(game_state):
+	if view_mode != "play" or game_state.is_empty() or GameEngine.is_over(game_state) or _is_ai_turn():
 		return
 	var has_action := false
 	for action in _legal_actions():
@@ -890,16 +1174,21 @@ func _select_reserve_piece(kind: String) -> void:
 
 func _handle_play_square(square: String) -> void:
 	if game_state.is_empty():
+		if ai_busy:
+			return
 		var rank := square.substr(1).to_int()
 		var file := square.unicode_at(0) - 65
 		if setup_white_file < 0 and rank == 1:
 			setup_white_file = file
 			setup_position = {square: _stack(Rules.WHITE, [Rules.SOVEREIGN])}
+			_queue_ai_turn()
 		elif setup_white_file >= 0 and rank == 9:
 			_finish_sovereign_setup(file)
 		queue_redraw()
 		return
 	if GameEngine.is_over(game_state):
+		return
+	if _is_ai_turn():
 		return
 	if not pending_artillery_actions.is_empty():
 		for action in pending_artillery_actions:
