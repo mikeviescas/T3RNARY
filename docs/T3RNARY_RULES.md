@@ -380,7 +380,7 @@ the record can be replayed from an empty board.
 
 This index is the authoritative quick reference for edge cases, simulator
 comparison, and AI rules review. The current implemented preset is
-`attrition-development-infiltration-v1` using piece catalog `core-pieces-v4`.
+`attrition-neutral-gate-opening-4-v1` using piece catalog `core-pieces-v4`.
 
 ## A. Core State
 
@@ -403,8 +403,8 @@ comparison, and AI rules review. The current implemented preset is
 - Development placement is restricted to the placing player's home territory.
 - Spy, Ballista, Trebuchet, and Recall are prohibited during development.
 - MOVE is prohibited until both players complete development.
-- Height 3 is locked separately for each player until that player completes a
-  non-Sovereign MOVE.
+- Height 3 remains locked until either player finishes a post-opening turn with
+  material in neutral territory. That event unlocks height 3 for both players.
 
 ## C. Normal PLACE Destinations
 
@@ -479,11 +479,12 @@ comparison, and AI rules review. The current implemented preset is
 ## J. Configuration Identity
 
 - Piece catalog: `core-pieces-v4`.
-- Ruleset: `attrition-development-infiltration-v1`.
+- Ruleset: `attrition-neutral-gate-opening-4-v1`.
 - MOVE against taller stack: `mutual_bottom_attrition`.
 - Artillery against taller stack: `target_bottom_attrition`.
 - Development opening: enabled, with 4 post-Sovereign placements per player.
-- Height-3 prerequisite: each player must first complete a non-Sovereign MOVE.
+- Height-3 prerequisite: any player must finish a post-opening turn with material
+  in the neutral territory; this unlocks height 3 for both players.
 - CONQUER victory: enabled.
 
 ## K. Unit Names and Serialized Identifiers

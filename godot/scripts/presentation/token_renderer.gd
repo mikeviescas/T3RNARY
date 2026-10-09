@@ -7,6 +7,7 @@ const Icons = preload("res://scripts/presentation/piece_icon_renderer.gd")
 # Each buried checker exposes enough of its wall and rim to make all three
 # physical layers countable without a numeric height badge.
 const STACK_RISE_RATIO := 0.27
+const LAYER_PINSTRIPE_WIDTH_RATIO := 0.025
 
 
 static func draw_stack(
@@ -39,22 +40,18 @@ static func draw_token(
 ) -> void:
 	var lift := radius * 0.07 if hovered else 0.0
 	var c := center - Vector2(0.0, lift)
-	var shadow_alpha := 0.38 if not hovered else 0.50
-	canvas.draw_colored_polygon(
-		_ellipse(c + Vector2(radius * 0.08, radius * 0.32), Vector2(radius * 0.94, radius * 0.40)),
-		Color(0.0, 0.0, 0.0, shadow_alpha)
-	)
 	if selected:
 		canvas.draw_circle(c + Vector2(0.0, radius * 0.11), radius * 1.12, Color(Palette.SELECTED, 0.22))
 		canvas.draw_arc(c, radius * 1.06, 0.0, TAU, 48, Palette.SELECTED, maxf(2.0, radius * 0.075), true)
 
-	# Visible lower wall gives each checker physical thickness.
-	canvas.draw_circle(c + Vector2(0.0, radius * 0.16), radius, Palette.token_edge(owner))
-	canvas.draw_circle(c + Vector2(0.0, radius * 0.08), radius, Palette.token_body(owner).darkened(0.10))
-	canvas.draw_arc(c + Vector2(0.0, radius * 0.13), radius * 0.93, 0.18, PI - 0.18, 24, Color(0.0, 0.0, 0.0, 0.34), maxf(1.0, radius * 0.055), true)
-	canvas.draw_circle(c, radius, Palette.token_body(owner))
-	canvas.draw_arc(c, radius * 0.91, PI * 1.08, PI * 1.92, 28, Color(1.0, 1.0, 1.0, 0.18), maxf(1.0, radius * 0.055), true)
-	canvas.draw_arc(c, radius * 0.91, PI * 0.08, PI * 0.92, 28, Color(0.0, 0.0, 0.0, 0.30), maxf(1.0, radius * 0.07), true)
+	# The pinstripe is the tile's outermost material, not an overlay or a lighting
+	# contour. Everything belonging to the tile is contained inside this circle.
+	var pinstripe_width := maxf(1.25, radius * LAYER_PINSTRIPE_WIDTH_RATIO)
+	canvas.draw_circle(c, radius, Palette.token_layer_border(owner))
+	canvas.draw_circle(c, radius - pinstripe_width, Palette.token_body(owner))
+	# Restrained highlights stay inside the painted edge.
+	canvas.draw_arc(c, radius - pinstripe_width * 1.55, PI * 1.08, PI * 1.92, 36, Color(1.0, 1.0, 1.0, 0.14), maxf(1.0, radius * 0.025), true)
+	canvas.draw_arc(c, radius - pinstripe_width * 1.55, PI * 0.08, PI * 0.92, 36, Color(0.0, 0.0, 0.0, 0.20), maxf(1.0, radius * 0.03), true)
 	canvas.draw_circle(c, radius * 0.72, Palette.token_edge(owner))
 	canvas.draw_circle(c - Vector2(0.0, radius * 0.025), radius * 0.64, Palette.token_face(owner))
 	canvas.draw_arc(c, radius * 0.61, PI, TAU, 24, Color(1.0, 1.0, 1.0, 0.17), maxf(1.0, radius * 0.035), true)
@@ -76,11 +73,3 @@ static func draw_empty_token(
 	canvas.draw_circle(center, radius, inner)
 	canvas.draw_arc(center, radius, 0.0, TAU, 40, ghost, maxf(1.5, radius * 0.10), true)
 	canvas.draw_arc(center, radius * 0.69, 0.0, TAU, 36, Color(ghost, 0.22), maxf(1.0, radius * 0.06), true)
-
-
-static func _ellipse(center: Vector2, radii: Vector2, segments := 36) -> PackedVector2Array:
-	var points := PackedVector2Array()
-	for index in range(segments):
-		var angle := TAU * float(index) / float(segments)
-		points.append(center + Vector2(cos(angle) * radii.x, sin(angle) * radii.y))
-	return points

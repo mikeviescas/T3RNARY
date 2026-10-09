@@ -19,10 +19,10 @@ const FRAME_MID := Color("292725")
 const FRAME_EDGE := Color("6e5233")
 const LIGHT_SQUARE := Color("c9a871")
 const DARK_SQUARE := Color("5d4938")
-const WHITE_TERRITORY := Color("d6aa68")
-const BLACK_TERRITORY := Color("607b91")
-const NEUTRAL_TERRITORY := Color("748061")
+const NEUTRAL_LIGHT_SQUARE := Color("cfb681")
+const NEUTRAL_DARK_SQUARE := Color("786653")
 const GRID_LINE := Color(0.10, 0.075, 0.055, 0.72)
+const NEUTRAL_BOUNDARY := Color("332d27")
 
 # Token materials. Piece identity never changes these colors.
 const WHITE_BODY := Color("e9dfcc")
@@ -33,6 +33,8 @@ const BLACK_BODY := Color("24282d")
 const BLACK_FACE := Color("353b41")
 const BLACK_EDGE := Color("0c0e11")
 const BLACK_INK := Color("f2e7d2")
+const WHITE_TOKEN_PINSTRIPE := Color("3b3f45")
+const BLACK_TOKEN_PINSTRIPE := Color("c5c9cd")
 
 # Interaction
 const SELECTED := Color("f1c85f")
@@ -40,14 +42,6 @@ const MOVE := Color("65d0d5")
 const CAPTURE := Color("e46b55")
 const PLACE := Color("7bd18d")
 const SPY := Color("b487e8")
-
-
-static func territory_tint(screen_row: int) -> Color:
-	if screen_row <= 2:
-		return BLACK_TERRITORY
-	if screen_row >= 6:
-		return WHITE_TERRITORY
-	return NEUTRAL_TERRITORY
 
 
 static func token_body(owner: String) -> Color:
@@ -65,3 +59,8 @@ static func token_edge(owner: String) -> Color:
 static func token_ink(owner: String) -> Color:
 	return WHITE_INK if owner == "white" else BLACK_INK
 
+
+static func token_layer_border(owner: String) -> Color:
+	# Purpose-painted graphite and silver-gray sit between the tile materials and
+	# literal black/white, preserving separation without a harsh graphic outline.
+	return WHITE_TOKEN_PINSTRIPE if owner == "white" else BLACK_TOKEN_PINSTRIPE

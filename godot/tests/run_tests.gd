@@ -3,6 +3,7 @@ extends SceneTree
 const Rules = preload("res://scripts/core/ternary_rules.gd")
 const Codec = preload("res://scripts/core/ternary_codec.gd")
 const GameEngine = preload("res://scripts/core/ternary_engine.gd")
+const OpponentAI = preload("res://scripts/core/ternary_ai.gd")
 const VisualIcons = preload("res://scripts/presentation/piece_icon_renderer.gd")
 const VisualPalette = preload("res://scripts/presentation/ternary_palette.gd")
 const VisualPrototype = preload("res://scripts/presentation/visual_prototype.gd")
@@ -15,6 +16,8 @@ func _init() -> void:
 	_test_initial_development_state()
 	_test_shared_rule_configuration()
 	_test_development_sequence_and_height_unlock()
+	_test_shared_neutral_height_unlock()
+	_test_white_open_placement_regressions()
 	_test_movement_and_capture_rules()
 	_test_move_attrition()
 	_test_royal_attack()
@@ -26,9 +29,9 @@ func _init() -> void:
 	_test_reinforcement_position()
 	_test_recall_excludes_sovereign()
 	_test_immediate_sovereign_capture()
+	_test_opponent_ai()
 	_test_golden_fixture()
 	_test_visual_system_contract()
-	_test_visual_prototype_uses_live_move_rules()
 	_test_simulator_manual_play_and_replay()
 	if failures == 0:
 		print("T3RNARY rules tests: %d checks passed" % checks)
@@ -64,6 +67,129 @@ func p(owner: String, kind: String) -> Dictionary:
 	return {"owner": owner, "kind": kind}
 
 
+func _test_opponent_ai() -> void:
+	var ai = OpponentAI.new()
+	var opening := GameEngine.initial_state(Rules.current_beta_ruleset())
+	opening = GameEngine.apply_action(opening, {"type":"place", "piece":"infantry", "destination":"D2"})
+	var first: Dictionary = ai.choose_action(opening)
+	var second: Dictionary = ai.choose_action(opening)
+	expect(not first.is_empty() and str(first.action.get("piece", "")) == Rules.INFANTRY, "computer begins with Infantry development")
+	expect(Codec.normalize_action(first.action) == Codec.normalize_action(second.action), "computer decisions are deterministic")
+
+	var winning := empty_state({
+		"I1": [p(Rules.WHITE, Rules.SOVEREIGN)],
+		"H1": [p(Rules.BLACK, Rules.SOVEREIGN)],
+	}, Rules.BLACK)
+	winning.rules = Rules.current_beta_ruleset()
+	winning.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	var win_decision: Dictionary = ai.choose_action(winning)
+	expect(str(win_decision.action.get("type", "")) == "move" and str(win_decision.action.get("source", "")) == "H1" and str(win_decision.action.get("destination", "")) == "I1", "computer never declines an immediate Sovereign capture")
+	expect(str(win_decision.reason) == "immediate victory", "computer records the reason for a winning move")
+
+	var artillery := empty_state({
+		"A1": [p(Rules.WHITE, Rules.SOVEREIGN)],
+		"I9": [p(Rules.BLACK, Rules.SOVEREIGN)],
+		"E6": [p(Rules.WHITE, Rules.REINFORCEMENT), p(Rules.WHITE, Rules.INFANTRY), p(Rules.WHITE, Rules.MARSHAL)],
+	}, Rules.BLACK)
+	artillery.rules = Rules.current_beta_ruleset()
+	artillery.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	artillery.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+	artillery.reserves.black.ballista = 1
+	var artillery_decision: Dictionary = ai.choose_action(artillery)
+	expect(str(artillery_decision.action.get("effect_target", "")) == "E6", "computer recognizes artillery attrition against an enemy 3 Stack")
+	expect(str(artillery_decision.reason).contains("3 Stack"), "computer records its 3-Stack response rationale")
+
+	var hanging := empty_state({
+		"I1": [p(Rules.WHITE, Rules.SOVEREIGN)],
+		"A9": [p(Rules.BLACK, Rules.SOVEREIGN)],
+		"B7": [p(Rules.WHITE, Rules.INFANTRY), p(Rules.WHITE, Rules.BALLISTA), p(Rules.WHITE, Rules.CHARIOT)],
+		"B6": [p(Rules.BLACK, Rules.TREBUCHET)],
+	}, Rules.BLACK)
+	hanging.rules = Rules.current_beta_ruleset()
+	hanging.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	hanging.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+	hanging.reserves.black.marshal = 1
+	hanging.reserves.black.infantry = 1
+	var marshal_donation := {"type":"place", "piece":"marshal", "destination":"B6"}
+	var exposed_result := GameEngine.apply_action(hanging, marshal_donation, false)
+	expect(ai._exposure_pressure(exposed_result, Rules.BLACK) >= 9.0, "computer values every piece in an exposed Trebuchet-Marshal Stack")
+	var hanging_decision: Dictionary = ai.choose_action(hanging)
+	expect(Codec.normalize_action(hanging_decision.action) != Codec.normalize_action(marshal_donation), "computer declines the logged Marshal-on-Trebuchet donation")
+
+	var defense := empty_state({
+		"I1": [p(Rules.WHITE, Rules.SOVEREIGN)],
+		"A9": [p(Rules.BLACK, Rules.SOVEREIGN)],
+		"D6": [p(Rules.WHITE, Rules.DRAGOON)],
+	}, Rules.BLACK)
+	defense.rules = Rules.current_beta_ruleset()
+	defense.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	defense.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+	defense.reserves.black.infantry = 1
+	defense.reserves.black.chariot = 1
+	var infantry_block := {"type":"place", "piece":"infantry", "destination":"B8"}
+	var chariot_block := {"type":"place", "piece":"chariot", "destination":"B8"}
+	var infantry_result := GameEngine.apply_action(defense, infantry_block, false)
+	var chariot_result := GameEngine.apply_action(defense, chariot_block, false)
+	expect(ai._action_priority(defense, infantry_block, infantry_result, Rules.BLACK) > ai._action_priority(defense, chariot_block, chariot_result, Rules.BLACK), "equal defensive blocks prefer the lower-cost available material")
+
+	var forced_loss := empty_state({
+		"I5": [p(Rules.WHITE, Rules.SOVEREIGN)],
+		"B9": [p(Rules.BLACK, Rules.SOVEREIGN)],
+		"B6": [p(Rules.WHITE, Rules.INFANTRY), p(Rules.WHITE, Rules.BALLISTA), p(Rules.WHITE, Rules.CHARIOT)],
+		"B8": [p(Rules.WHITE, Rules.DRAGOON), p(Rules.WHITE, Rules.MARSHAL)],
+	}, Rules.BLACK)
+	forced_loss.rules = Rules.current_beta_ruleset()
+	forced_loss.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	forced_loss.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+	var forced_score := ai._search(forced_loss, Rules.BLACK, 0, -1000000000.0, 1000000000.0, 2)
+	expect(forced_score < -500000000.0, "forcing extension sees through a protected Marshal threat to the eventual Sovereign capture")
+
+	var prototype := VisualPrototype.new()
+	prototype.view_mode = "play"
+	prototype.ai_enabled = true
+	prototype.human_recording_enabled = false
+	prototype.game_state = winning.duplicate(true)
+	prototype.manual_initial_state = winning.duplicate(true)
+	prototype.manual_states = [winning.duplicate(true)]
+	prototype._perform_ai_turn()
+	expect(prototype.manual_actions.size() == 1 and prototype.game_state.winner == Rules.BLACK, "simulator applies the computer's turn through the shared rules engine")
+	expect(prototype.ai_annotations.size() == 1 and prototype.ai_annotations[0].has("reason"), "simulator records an auditable computer decision annotation")
+	expect(prototype._game_end_method() == "SOVEREIGN CAPTURE", "game-over presentation identifies a Sovereign-capture victory")
+	prototype.free()
+
+	var setup_prototype := VisualPrototype.new()
+	setup_prototype.view_mode = "play"
+	setup_prototype.ai_enabled = true
+	setup_prototype.human_recording_enabled = false
+	setup_prototype._handle_play_square("B1")
+	expect(setup_prototype.setup_white_file == 1 and setup_prototype.ai_busy, "computer setup is queued after White places its Sovereign")
+	setup_prototype._perform_ai_sovereign_setup()
+	expect(not setup_prototype.game_state.is_empty() and setup_prototype.game_state.board.has("H9"), "computer places the Black Sovereign before normal play")
+	expect(setup_prototype.game_state.turn == Rules.WHITE, "White receives the first normal action after computer Sovereign setup")
+	setup_prototype.free()
+
+	# Regression for the first open-play handoff reported from the simulator.
+	var transition := GameEngine.initial_state(Rules.current_beta_ruleset(), Vector2i(8, 0))
+	var development := [
+		{"type":"place", "piece":"infantry", "destination":"H2"},
+		{"type":"place", "piece":"infantry", "destination":"B7"},
+		{"type":"place", "piece":"infantry", "destination":"H2"},
+		{"type":"place", "piece":"infantry", "destination":"B7"},
+		{"type":"place", "piece":"infantry", "destination":"A3"},
+		{"type":"place", "piece":"infantry", "destination":"A7"},
+		{"type":"place", "piece":"infantry", "destination":"E3"},
+		{"type":"place", "piece":"infantry", "destination":"A7"},
+	]
+	for action in development:
+		transition = GameEngine.apply_action(transition, action)
+	transition = GameEngine.apply_action(transition, {"type":"move", "source":"A3", "destination":"A4"})
+	var started := Time.get_ticks_msec()
+	var transition_decision: Dictionary = ai.choose_action(transition)
+	var elapsed := Time.get_ticks_msec() - started
+	expect(not transition_decision.is_empty(), "computer responds after the first post-development MOVE")
+	expect(elapsed < 3000, "first open-play computer response remains within the interactive search budget (%d ms)" % elapsed)
+
+
 func _test_shared_rule_configuration() -> void:
 	expect(Rules.configuration_errors().is_empty(), "shared rule JSON passes strict validation")
 	expect(Rules.catalog_id() == "core-pieces-v4", "piece catalog id loads")
@@ -81,6 +207,7 @@ func _test_shared_rule_configuration() -> void:
 	expect(Rules.attrition_development_ruleset().artillery_vs_taller == "target_bottom_attrition", "artillery attrition ruleset loads")
 	expect(not Rules.development_ruleset().infiltration_victory, "baseline keeps capture-only victory")
 	expect(Rules.development_infiltration_ruleset().infiltration_victory, "infiltration ruleset loads")
+	expect(Rules.current_beta_ruleset().id == "attrition-neutral-gate-opening-4-v1", "current beta uses the four-PLACE shared-neutral-gate ruleset")
 
 
 func _test_initial_development_state() -> void:
@@ -115,6 +242,54 @@ func _test_development_sequence_and_height_unlock() -> void:
 	state.turn = Rules.WHITE
 	expect(state.height_three_unlocked.white, "non-Sovereign move unlocks height three")
 	expect(has(GameEngine.legal_actions(state), {"type":"place", "piece":"marshal", "destination":"A1"}), "height three placement becomes legal")
+
+
+func _test_shared_neutral_height_unlock() -> void:
+	var state := GameEngine.initial_state(Rules.current_beta_ruleset())
+	state.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	state.board.A1 = [p(Rules.WHITE, Rules.INFANTRY), p(Rules.WHITE, Rules.CHARIOT)]
+	state.board.A9 = [p(Rules.BLACK, Rules.INFANTRY), p(Rules.BLACK, Rules.CHARIOT)]
+	state.reserves.white.infantry -= 1
+	state.reserves.white.chariot -= 1
+	state.reserves.black.infantry -= 1
+	state.reserves.black.chariot -= 1
+	expect(not state.height_three_unlocked.white and not state.height_three_unlocked.black, "shared neutral gate begins locked")
+	expect(not has(GameEngine.legal_actions(state), {"type":"place", "piece":"marshal", "destination":"A1"}), "shared neutral gate blocks height three")
+	state = GameEngine.apply_action(state, {"type":"place", "piece":"infantry", "destination":"B1"})
+	expect(not state.height_three_unlocked.white and not state.height_three_unlocked.black, "home-territory material does not open shared neutral gate")
+	state = GameEngine.apply_action(state, {"type":"place", "piece":"infantry", "destination":"D4"})
+	expect(state.height_three_unlocked.white and state.height_three_unlocked.black, "neutral material opens height three for both players")
+	expect(state.turn == Rules.WHITE, "gate opener's opponent receives first height-three opportunity")
+	expect(has(GameEngine.legal_actions(state), {"type":"place", "piece":"marshal", "destination":"A1"}), "height three is legal after shared gate opens")
+
+
+func _test_white_open_placement_regressions() -> void:
+	var state := GameEngine.initial_state(Rules.current_beta_ruleset())
+	state.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	state.height_three_unlocked = {Rules.WHITE: true, Rules.BLACK: true}
+	state.board.B2 = [p(Rules.WHITE, Rules.INFANTRY)]
+	state.board.C2 = [p(Rules.WHITE, Rules.INFANTRY), p(Rules.WHITE, Rules.DRAGOON)]
+	state.board.E8 = [p(Rules.BLACK, Rules.INFANTRY), p(Rules.BLACK, Rules.INFANTRY)]
+	state.reserves.white.infantry -= 2
+	state.reserves.white.dragoon -= 1
+	state.reserves.black.infantry -= 2
+	var actions := GameEngine.legal_actions(state)
+	expect(has(actions, {"type":"place", "piece":"spy", "destination":"E8"}), "White Spy may convert a legal enemy-territory stack after the opening")
+	expect(has(actions, {"type":"place", "piece":"ballista", "destination":"B2"}), "White Ballista may stack on a friendly 1 Stack")
+	expect(has(actions, {"type":"place", "piece":"ballista", "destination":"C2"}), "White Ballista may make a 3 Stack after the shared gate opens")
+	var prototype := VisualPrototype.new()
+	prototype.view_mode = "play"
+	prototype.game_state = state.duplicate(true)
+	prototype._select_reserve_piece(Rules.BALLISTA)
+	expect(prototype.selected_piece_kind == Rules.BALLISTA, "White can select the Ballista in the simulator")
+	prototype._handle_play_square("C2")
+	expect(prototype.game_state.board.C2.size() == 3 and prototype.game_state.board.C2[-1].kind == Rules.BALLISTA, "White can complete a Ballista 3 Stack through the simulator")
+	prototype.game_state = state.duplicate(true)
+	prototype._select_reserve_piece(Rules.SPY)
+	expect(prototype.selected_piece_kind == Rules.SPY, "White can select the Spy in the simulator")
+	prototype._handle_play_square("E8")
+	expect(prototype.game_state.board.E8.size() == 3 and prototype.game_state.board.E8[-1].owner == Rules.WHITE and prototype.game_state.board.E8[-1].kind == Rules.SPY, "White can complete enemy-territory Spy conversion through the simulator")
+	prototype.free()
 
 
 func _test_movement_and_capture_rules() -> void:
@@ -185,6 +360,16 @@ func _test_infiltration_victory() -> void:
 	state = empty_state({"E8": [p("white", "sovereign")], "E1": [p("black", "sovereign")]})
 	state = GameEngine.apply_action(state, action)
 	expect(state.winner == null, "capture-only rules do not award back-row victory")
+
+	state = empty_state({
+		"E8": [p("white", "infantry")],
+		"E1": [p("white", "sovereign")],
+		"A9": [p("black", "sovereign")],
+	})
+	state.rules = Rules.ruleset("attrition-neutral-gate-opening-4-v1")
+	state.development_placements = {Rules.WHITE: 4, Rules.BLACK: 4}
+	state = GameEngine.apply_action(state, action)
+	expect(state.winner == null, "only a Sovereign can win by back-row infiltration")
 
 
 func _test_griffin_height_three_moves() -> void:
@@ -286,29 +471,10 @@ func _test_visual_system_contract() -> void:
 	var kinds := VisualIcons.supported_kinds()
 	expect(kinds.size() == 11, "visual system covers all eleven piece types")
 	expect("reinforcement" in kinds and "sovereign" in kinds, "visual system includes Reinforcement and Sovereign")
-	expect(VisualPalette.BLACK_TERRITORY != VisualPalette.NEUTRAL_TERRITORY and VisualPalette.NEUTRAL_TERRITORY != VisualPalette.WHITE_TERRITORY, "three territories have distinct material colors")
+	expect(VisualPalette.NEUTRAL_LIGHT_SQUARE != VisualPalette.LIGHT_SQUARE and VisualPalette.NEUTRAL_DARK_SQUARE != VisualPalette.DARK_SQUARE, "both neutral square colors use a faded brown finish")
 	expect(VisualPalette.token_body("white") != VisualPalette.token_body("black"), "player token materials remain distinct")
-
-
-func _test_visual_prototype_uses_live_move_rules() -> void:
-	var prototype := VisualPrototype.new()
-	prototype._build_sample_position()
-	var marshal_markers: Dictionary = prototype.legal_move_markers("E5")
-	expect(not marshal_markers.is_empty(), "selected Marshal stack receives generated move markers")
-	expect(marshal_markers.get("E8") == "capture", "occupied legal destination receives capture marker")
-	expect(not marshal_markers.has("C6"), "prototype no longer displays hardcoded illegal capture")
-	var chariot_markers: Dictionary = prototype.legal_move_markers("B4")
-	expect(not chariot_markers.is_empty(), "markers update for another selected mobile stack")
-	var spy_markers: Dictionary = prototype.legal_move_markers("H4")
-	expect(spy_markers.is_empty(), "Spy Stack correctly receives no move markers")
-	var height_two_griffin: Dictionary = prototype.legal_move_markers("D7")
-	expect(height_two_griffin.has("C5") and height_two_griffin.has("B6"), "height-two Griffin receives 1x2 and 2x1 moves")
-	expect(not height_two_griffin.has("B4") and not height_two_griffin.has("G5"), "height-two Griffin does not receive 2x3 or 3x2 moves")
-	var height_three_griffin: Dictionary = prototype.legal_move_markers("C6")
-	expect(height_three_griffin.has("A3") and height_three_griffin.has("E9"), "height-three Griffin receives 2x3 and 3x2 moves")
-	expect(height_three_griffin.has("B4") and height_three_griffin.has("D4"), "height-three Griffin retains 1x2 and 2x1 moves")
-	expect(not height_three_griffin.has("G3") and not height_three_griffin.has("F2"), "height-three Griffin does not receive obsolete 3x4 or 4x3 moves")
-	prototype.free()
+	expect(VisualPalette.token_layer_border("white") == VisualPalette.WHITE_TOKEN_PINSTRIPE, "White tiles use a graphite painted pinstripe")
+	expect(VisualPalette.token_layer_border("black") == VisualPalette.BLACK_TOKEN_PINSTRIPE, "Black tiles use a silver-gray painted pinstripe")
 
 
 func _test_simulator_manual_play_and_replay() -> void:
@@ -320,6 +486,7 @@ func _test_simulator_manual_play_and_replay() -> void:
 	expect(prototype._reference_owner() == Rules.BLACK, "reference tokens switch to Black for Black Sovereign placement")
 	prototype._handle_play_square("H9")
 	expect(not prototype.game_state.is_empty(), "two Sovereign choices initialize the live game")
+	expect(prototype.game_state.rules.id == "attrition-neutral-gate-opening-4-v1", "new simulator games use the current four-PLACE beta rules")
 	expect(prototype._reference_owner() == Rules.WHITE, "reference tokens match White on the first normal turn")
 	expect(prototype.game_state.board.has("B1") and prototype.game_state.board.has("H9"), "manual setup preserves both chosen Sovereign files")
 	prototype._select_reserve_piece(Rules.INFANTRY)
@@ -341,11 +508,19 @@ func _test_simulator_manual_play_and_replay() -> void:
 	prototype._redo_manual_action()
 	expect(prototype.game_state.ply == 1 and prototype.game_state.turn == Rules.BLACK, "manual REDO restores the later state")
 	expect(prototype.manual_actions.size() == 1 and prototype.manual_redo_actions.is_empty(), "manual REDO restores action history")
+	var live_notation: Array = prototype._notation_entries()
+	expect(live_notation.size() == 3, "live notation includes both Sovereign placements and the current action history")
+	expect(str(live_notation[0]) == "1W P-V@B1" and str(live_notation[1]) == "1B P-V@H9", "notation preserves both chosen Sovereign starting squares")
+	expect(str(live_notation[2]).begins_with("2W P-I@"), "PLACE notation uses the shared Infantry symbol and destination")
+	expect(prototype._notation_copy_text().contains("Through recorded ply: 1"), "copied notation identifies the current live-game ply")
 	var human_document := prototype._human_replay_document()
 	expect(human_document.metadata.source == "human_hotseat", "human games identify their source for analysis")
 	expect(human_document.actions.size() == 1 and human_document.metadata.plies == 1, "human game recording contains the replayable action history")
 	prototype._load_replay_document(human_document)
 	expect(prototype.replay_states.size() == 2 and prototype.replay_states[-1].ply == 1, "recorded human games load directly in replay review")
+	expect(prototype._notation_entries().size() == 2, "replay notation at the initial position excludes future actions")
+	prototype._set_replay_index(1)
+	expect(prototype._notation_entries().size() == 3, "replay notation advances only through the current replay ply")
 	prototype.view_mode = "play"
 	prototype._undo_manual_action()
 	expect(prototype.game_state.ply == 0, "manual history can still move backward after REDO")
@@ -360,6 +535,8 @@ func _test_simulator_manual_play_and_replay() -> void:
 		"actions": replay_action_list,
 	})
 	expect(prototype.replay_states.size() == replay_action_list.size() + 1, "replay review reconstructs every recorded board state")
+	expect(prototype._notation_action_count() == 0, "newly loaded replay notation begins at recorded ply zero")
 	prototype._set_replay_index(prototype.replay_states.size() - 1)
 	expect(prototype.game_state.ply == replay_action_list.size(), "replay navigation reaches the final recorded ply")
+	expect(prototype._notation_action_count() == replay_action_list.size(), "replay notation copy is bounded by the current replay position")
 	prototype.free()

@@ -160,7 +160,9 @@ def _validate_rulesets(
     required = {
         "development_opening", "development_placements_per_player",
         "development_home_only", "development_specials_prohibited",
-        "height_three_requires_nonsovereign_move", "infiltration_victory", "move_vs_taller",
+        "height_three_requires_nonsovereign_move",
+        "height_three_requires_shared_neutral_presence",
+        "infiltration_victory", "move_vs_taller",
         "artillery_vs_taller",
     }
     for ruleset_id, values in document["rulesets"].items():
@@ -168,10 +170,18 @@ def _validate_rulesets(
         for key in (
             "development_opening", "development_home_only",
             "development_specials_prohibited", "height_three_requires_nonsovereign_move",
+            "height_three_requires_shared_neutral_presence",
             "infiltration_victory",
         ):
             if not isinstance(values[key], bool):
                 raise ValueError(f"ruleset.{ruleset_id}.{key} must be boolean")
+        if (
+            values["height_three_requires_nonsovereign_move"]
+            and values["height_three_requires_shared_neutral_presence"]
+        ):
+            raise ValueError(
+                f"ruleset.{ruleset_id} selects multiple height-three unlock rules"
+            )
         _positive_int(
             values["development_placements_per_player"],
             f"ruleset.{ruleset_id}.development_placements_per_player",

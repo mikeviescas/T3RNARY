@@ -124,9 +124,10 @@ All four current presets use catalog `core-pieces-v4`, whose Royal Attack rule
 lets a Sovereign capture and replace any adjacent enemy stack regardless of
 height. The normal threat system still applies after the capture.
 
-The experimental `development-infiltration-v1` and
-`attrition-development-infiltration-v1` presets set `infiltration_victory` to
-true. Entering the opponent's back row with the Sovereign then wins immediately.
+The current beta preset, `attrition-neutral-gate-opening-4-v1`, combines a
+four-PLACE development opening, shared neutral-territory height-3 gate,
+attrition, Royal Attack, and immediate back-row Conquer victory. The opening-5,
+opening-6, and opening-7 presets remain available for controlled research.
 
 ## Replay
 

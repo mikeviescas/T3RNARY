@@ -20,13 +20,14 @@
     "artilleryCombatMode": {"enum": ["illegal", "target_bottom_attrition"]},
     "rulesetValues": {
       "type": "object",
-      "required": ["development_opening", "development_placements_per_player", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move", "infiltration_victory", "move_vs_taller", "artillery_vs_taller"],
+      "required": ["development_opening", "development_placements_per_player", "development_home_only", "development_specials_prohibited", "height_three_requires_nonsovereign_move", "height_three_requires_shared_neutral_presence", "infiltration_victory", "move_vs_taller", "artillery_vs_taller"],
       "properties": {
         "development_opening": {"type": "boolean"},
         "development_placements_per_player": {"type": "integer", "minimum": 0},
         "development_home_only": {"type": "boolean"},
         "development_specials_prohibited": {"type": "boolean"},
         "height_three_requires_nonsovereign_move": {"type": "boolean"},
+        "height_three_requires_shared_neutral_presence": {"type": "boolean"},
         "infiltration_victory": {"type": "boolean"},
         "move_vs_taller": {"$ref": "#/$defs/moveCombatMode"},
         "artillery_vs_taller": {"$ref": "#/$defs/artilleryCombatMode"}

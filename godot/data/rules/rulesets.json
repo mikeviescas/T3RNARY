@@ -9,6 +9,7 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": false,
       "infiltration_victory": false,
       "move_vs_taller": "illegal",
       "artillery_vs_taller": "illegal"
@@ -19,6 +20,7 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": true,
+      "height_three_requires_shared_neutral_presence": false,
       "infiltration_victory": false,
       "move_vs_taller": "illegal",
       "artillery_vs_taller": "illegal"
@@ -29,6 +31,7 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": false,
       "infiltration_victory": false,
       "move_vs_taller": "mutual_bottom_attrition",
       "artillery_vs_taller": "target_bottom_attrition"
@@ -39,6 +42,7 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": true,
+      "height_three_requires_shared_neutral_presence": false,
       "infiltration_victory": false,
       "move_vs_taller": "mutual_bottom_attrition",
       "artillery_vs_taller": "target_bottom_attrition"
@@ -49,6 +53,7 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": true,
+      "height_three_requires_shared_neutral_presence": false,
       "infiltration_victory": true,
       "move_vs_taller": "illegal",
       "artillery_vs_taller": "illegal"
@@ -59,6 +64,51 @@
       "development_home_only": true,
       "development_specials_prohibited": true,
       "height_three_requires_nonsovereign_move": true,
+      "height_three_requires_shared_neutral_presence": false,
+      "infiltration_victory": true,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "attrition-neutral-gate-opening-4-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 4,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": true,
+      "infiltration_victory": true,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "attrition-neutral-gate-opening-5-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 5,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": true,
+      "infiltration_victory": true,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "attrition-neutral-gate-opening-6-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 6,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": true,
+      "infiltration_victory": true,
+      "move_vs_taller": "mutual_bottom_attrition",
+      "artillery_vs_taller": "target_bottom_attrition"
+    },
+    "attrition-neutral-gate-opening-7-v1": {
+      "development_opening": true,
+      "development_placements_per_player": 7,
+      "development_home_only": true,
+      "development_specials_prohibited": true,
+      "height_three_requires_nonsovereign_move": false,
+      "height_three_requires_shared_neutral_presence": true,
       "infiltration_victory": true,
       "move_vs_taller": "mutual_bottom_attrition",
       "artillery_vs_taller": "target_bottom_attrition"

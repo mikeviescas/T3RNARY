@@ -52,6 +52,7 @@ ordinary pieces attacking taller stacks. `attrition-control-v2` and
 `attrition-development-v2` enable both implemented attrition rules, allowing
 direct baseline comparisons without modifying engine code.
 
-`development-infiltration-v1` and
-`attrition-development-infiltration-v1` add the experimental Infiltration win
-condition to those two development presets without changing their other rules.
+`attrition-neutral-gate-opening-4-v1` is the current beta preset. It uses four
+opening PLACE actions per player and unlocks height 3 for both players when
+either player ends a post-opening turn with material in neutral territory.
+Opening-5, opening-6, and opening-7 remain comparison presets.

@@ -62,13 +62,26 @@ PYTHONPATH=research/python python3 research/python/tournament.py \
   --policies tactical height_rush material_control
 ```
 
-Experimental immediate back-row victory is available through
-`development-infiltration-v1` and
-`attrition-development-infiltration-v1`.
+Add `--tactical-search` to wrap every selected policy in the bounded shared
+reply-search layer. It preserves each policy's opening and strategic weights,
+then compares a short list of candidate actions against likely opponent replies
+after development. Tournament reports include override rates, examined nodes,
+and tactical reasons.
+
+The current beta preset is `attrition-neutral-gate-opening-4-v1`: four opening
+PLACE actions per player and a shared height-3 unlock when either player ends a
+post-opening turn with material in neutral territory. Earlier opening sizes and
+unlock models remain named research presets for controlled comparisons.
 
 Add `--limit-replay-dir research/replays/long_games/<ruleset>` to preserve every
 ply-limit game as a replay JSON file with final-position diagnostics. Validate
 and summarize saved limit games with `research/python/analyze_limit_replays.py`.
+
+For routine review, use `--curated-replay-dir research/replays/tournaments/<name>`.
+The tournament first ranks every game, then deterministically reproduces a compact
+set of matchup representatives and behavioral outliers. The folder contains
+`representative`, `outliers`, and `limits` groups plus a `manifest.json` explaining
+why every replay was selected.
 
 ## Contract policy
 

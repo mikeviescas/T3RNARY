@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import random
+import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, Sequence, TypeVar
 
 from .engine import (
     Action,
+    BOARD_SIZE,
     GameState,
     MoveAction,
     PieceType,
@@ -17,6 +19,7 @@ from .engine import (
     is_sovereign_threatened,
     legal_actions,
     preview_action,
+    stack_controls_square,
 )
 
 
@@ -84,6 +87,183 @@ def _own_move_attrition_pieces(state: GameState, action: Action):
     ):
         return attacker
     return ()
+
+
+def _sovereign_square(state: GameState, player: Player) -> tuple[int, int] | None:
+    return next(
+        (
+            square
+            for square, stack in state.board.items()
+            if stack[-1].owner is player and stack[-1].kind is PieceType.SOVEREIGN
+        ),
+        None,
+    )
+
+
+def sovereign_attack_profile(state: GameState, attacker: Player) -> tuple[int, int]:
+    """Return attacking sources and how many are protected by another stack."""
+    sovereign = _sovereign_square(state, attacker.opponent)
+    if sovereign is None:
+        return 0, 0
+    sources = [
+        square
+        for square, stack in state.board.items()
+        if stack[-1].owner is attacker and stack_controls_square(state, square, sovereign)
+    ]
+    protected = sum(
+        any(
+            other != source
+            and stack[-1].owner is attacker
+            and stack_controls_square(state, other, source)
+            for other, stack in state.board.items()
+        )
+        for source in sources
+    )
+    return len(sources), protected
+
+
+def valuable_burial_value(state: GameState, action: Action) -> float:
+    """Material value made permanently subordinate by a normal TOP placement."""
+    if isinstance(action, MoveAction) or action.piece is PieceType.REINFORCEMENT:
+        return 0.0
+    existing = state.board.get(action.destination)
+    if not existing or existing[-1].owner is not state.turn:
+        return 0.0
+    return sum(
+        PIECE_VALUES[piece.kind]
+        for piece in existing
+        if piece.kind not in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+    )
+
+
+def is_royal_interposition_trap(state: GameState, action: Action) -> bool:
+    """Detect a cheap block that baits an attacker into a safe Royal Attack."""
+    if (
+        isinstance(action, MoveAction)
+        or action.piece not in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+        or not is_sovereign_threatened(state, state.turn)
+    ):
+        return False
+    defender = state.turn
+    blocked_square = action.destination
+    blocked = preview_action(state, action)
+    if is_sovereign_threatened(blocked, defender):
+        return False
+    for reply in legal_actions(blocked):
+        if not isinstance(reply, MoveAction) or reply.destination != blocked_square:
+            continue
+        after_reply = preview_action(blocked, reply)
+        sovereign = _sovereign_square(after_reply, defender)
+        if sovereign is None:
+            continue
+        if len(after_reply.board.get(blocked_square, ())) <= 1:
+            continue
+        royal_replies = [
+            candidate
+            for candidate in legal_actions(after_reply)
+            if isinstance(candidate, MoveAction)
+            and candidate.source == sovereign
+            and candidate.destination == blocked_square
+        ]
+        if any(
+            not is_sovereign_threatened(preview_action(after_reply, royal), defender)
+            for royal in royal_replies
+        ):
+            return True
+    return False
+
+
+def action_purpose_count(state: GameState, action: Action, result: GameState) -> int:
+    """Count distinct useful jobs performed by one action."""
+    player = state.turn
+    purposes = 0
+    if _removed_target_pieces(state, action):
+        purposes += 1
+    if is_sovereign_threatened(state, player) and not is_sovereign_threatened(result, player):
+        purposes += 1
+    if not is_sovereign_threatened(state, player.opponent) and is_sovereign_threatened(result, player.opponent):
+        purposes += 1
+
+    destination = action.destination
+    own_sovereign = _sovereign_square(result, player)
+    if (
+        own_sovereign is not None
+        and destination in result.board
+        and result.board[destination][-1].owner is player
+        and stack_controls_square(result, destination, own_sovereign)
+    ):
+        purposes += 1
+
+    resulting_stack = result.board.get(destination)
+    if resulting_stack and resulting_stack[-1].owner is player:
+        if len(resulting_stack) == 2 and all(
+            piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+            for piece in resulting_stack
+        ):
+            purposes += 1
+        if len(resulting_stack) == 3:
+            purposes += 1
+    return purposes
+
+
+def _vector_piece_weight(
+    state: GameState, piece: PieceType, destination: tuple[int, int]
+) -> float:
+    """Prefer Chariots on straight Sovereign vectors and Dragoons on diagonals."""
+    enemy_sovereign = _sovereign_square(state, state.turn.opponent)
+    if enemy_sovereign is None:
+        return 1.0
+    dx = abs(destination[0] - enemy_sovereign[0])
+    dy = abs(destination[1] - enemy_sovereign[1])
+    straight = dx == 0 or dy == 0
+    diagonal = dx == dy
+    if piece is PieceType.CHARIOT:
+        return 1.8 if straight else (0.82 if diagonal else 1.0)
+    if piece is PieceType.DRAGOON:
+        return 1.8 if diagonal else (0.82 if straight else 1.0)
+    if piece is PieceType.MARSHAL and (straight or diagonal):
+        return 1.2
+    return 1.0
+
+
+def is_free_capture(
+    state: GameState, action: Action, result: GameState | None = None
+) -> bool:
+    """Return whether a capture is safe, favorable, and not MOVE-recapturable."""
+    removed = _removed_target_pieces(state, action)
+    if not removed:
+        return False
+    if (
+        not isinstance(action, MoveAction)
+        and action.piece in {PieceType.BALLISTA, PieceType.TREBUCHET}
+    ):
+        # A SHOOT may be tactically safe, but it commits a scarce artillery
+        # token from reserve and therefore is not an automatic free capture.
+        return False
+    if result is None:
+        result = preview_action(state, action)
+    player = state.turn
+    if is_sovereign_threatened(result, player):
+        return False
+    removed_value = sum(
+        0.0 if piece.kind is PieceType.SOVEREIGN else PIECE_VALUES[piece.kind]
+        for piece in removed
+    )
+    own_loss_value = sum(
+        PIECE_VALUES[piece.kind]
+        for piece in _own_move_attrition_pieces(state, action)
+    )
+    if removed_value < own_loss_value:
+        return False
+    actor_square = action.destination
+    actor = result.board.get(actor_square)
+    if not actor or actor[-1].owner is not player:
+        return False
+    return not any(
+        stack[-1].owner is player.opponent
+        and stack_controls_square(result, square, actor_square)
+        for square, stack in result.board.items()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,9 +390,14 @@ class HeuristicPolicy:
         if not actions:
             raise ValueError("cannot choose without legal actions")
 
-        winning = [action for action in actions if self._wins_game(state, action)]
-        if winning:
-            return rng.choice(winning)
+        sovereign_captures = [
+            action for action in actions if self._captures_sovereign(state, action)
+        ]
+        if sovereign_captures:
+            return rng.choice(sovereign_captures)
+        other_wins = [action for action in actions if self._wins_game(state, action)]
+        if other_wins:
+            return rng.choice(other_wins)
 
         candidates = list(actions)
         preview_cache: dict[Action, GameState] = {}
@@ -455,6 +640,314 @@ class HeuristicPolicy:
             center_distance = abs(action.destination[0] - 4) + abs(action.destination[1] - 4)
             weight *= 1.0 + 0.025 * (8 - center_distance)
         return weight
+
+
+def _immediate_win_action(state: GameState, action: Action) -> bool:
+    if isinstance(action, MoveAction):
+        target = state.board.get(action.destination)
+        if target and target[-1].kind is PieceType.SOVEREIGN:
+            return True
+        if state.rules.infiltration_victory:
+            moving = state.board[action.source]
+            enemy_back_rank = 8 if state.turn is Player.WHITE else 0
+            return (
+                moving[-1].kind is PieceType.SOVEREIGN
+                and action.destination[1] == enemy_back_rank
+            )
+    return False
+
+
+def _safe_sovereign_flights(state: GameState, player: Player) -> int:
+    """Approximate chess-style king mobility without generating a full turn."""
+    sovereign = _sovereign_square(state, player)
+    if sovereign is None:
+        return 0
+    safe = 0
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == dy == 0:
+                continue
+            destination = sovereign[0] + dx, sovereign[1] + dy
+            if not (0 <= destination[0] < BOARD_SIZE and 0 <= destination[1] < BOARD_SIZE):
+                continue
+            occupant = state.board.get(destination)
+            if occupant and occupant[-1].owner is player:
+                continue
+            if any(
+                stack[-1].owner is player.opponent
+                and square != destination
+                and stack_controls_square(state, square, destination)
+                for square, stack in state.board.items()
+            ):
+                continue
+            safe += 1
+    return safe
+
+
+def _position_score(state: GameState, perspective: Player) -> float:
+    """Fast leaf evaluation shared by all shallow-search policy variants."""
+    if state.winner is perspective:
+        return 1_000_000.0
+    if state.winner is perspective.opponent:
+        return -1_000_000.0
+    if state.is_draw:
+        return 0.0
+
+    score = 0.0
+    for player, sign in ((perspective, 1.0), (perspective.opponent, -1.0)):
+        score += sign * 0.82 * sum(
+            PIECE_VALUES[kind] * count
+            for kind, count in state.reserves[player].items()
+            if kind is not PieceType.SOVEREIGN
+        )
+        for stack in state.board.values():
+            if stack[-1].owner is not player:
+                continue
+            for index, piece in enumerate(stack):
+                if piece.kind is PieceType.SOVEREIGN:
+                    continue
+                # TOP material keeps its full agency. Buried premium material
+                # still counts, but is less useful until attrition exposes it.
+                agency = 1.0 if index == len(stack) - 1 else 0.58
+                score += sign * agency * PIECE_VALUES[piece.kind]
+
+    own_sovereign = _sovereign_square(state, perspective)
+    enemy_sovereign = _sovereign_square(state, perspective.opponent)
+    if own_sovereign is not None and enemy_sovereign is not None:
+        own_progress = own_sovereign[1] if perspective is Player.WHITE else 8 - own_sovereign[1]
+        enemy_progress = enemy_sovereign[1] if perspective.opponent is Player.WHITE else 8 - enemy_sovereign[1]
+        score += 1.5 * (own_progress - enemy_progress)
+
+    if is_sovereign_threatened(state, perspective):
+        score -= 95.0
+    if is_sovereign_threatened(state, perspective.opponent):
+        score += 95.0
+
+    own_sources, own_protected = sovereign_attack_profile(state, perspective)
+    enemy_sources, enemy_protected = sovereign_attack_profile(state, perspective.opponent)
+    score += 18.0 * (own_sources - enemy_sources)
+    score += 13.0 * (own_protected - enemy_protected)
+
+    own_flights = _safe_sovereign_flights(state, perspective)
+    enemy_flights = _safe_sovereign_flights(state, perspective.opponent)
+    score += 5.0 * (own_flights - enemy_flights)
+    if enemy_flights <= 2:
+        score += 12.0 * (3 - enemy_flights)
+    if own_flights <= 2:
+        score -= 12.0 * (3 - own_flights)
+    return score
+
+
+@dataclass(slots=True)
+class TacticalSearchPolicy:
+    """Bounded two-ply search wrapped around an existing strategic policy."""
+
+    base: Policy
+    max_root_candidates: int = 6
+    max_reply_candidates: int = 6
+    policy_samples: int = 3
+    near_best_margin: float = 5.0
+    override_threshold: float = 16.0
+    name: str = "tactical_search"
+    last_search_info: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.name = self.base.name
+        self.last_search_info = {}
+
+    def choose(
+        self, state: GameState, actions: Sequence[Action], rng: random.Random
+    ) -> Action:
+        if not actions:
+            raise ValueError("cannot choose without legal actions")
+
+        sovereign_wins = [
+            action
+            for action in actions
+            if isinstance(action, MoveAction)
+            and (target := state.board.get(action.destination)) is not None
+            and target[-1].kind is PieceType.SOVEREIGN
+        ]
+        if sovereign_wins:
+            chosen = rng.choice(sovereign_wins)
+            self.last_search_info = {
+                "searched": False, "overrode": False, "reason": "sovereign_capture",
+            }
+            return chosen
+        other_wins = [action for action in actions if _immediate_win_action(state, action)]
+        if other_wins:
+            chosen = rng.choice(other_wins)
+            self.last_search_info = {
+                "searched": False, "overrode": False, "reason": "immediate_win",
+            }
+            return chosen
+
+        baseline = self.base.choose(state, actions, rng)
+        if state.in_development:
+            self.last_search_info = {
+                "searched": False, "overrode": False, "reason": "opening",
+            }
+            return baseline
+
+        root = state.turn
+        previews = {action: preview_action(state, action) for action in actions}
+        safe_actions = [
+            action for action in actions
+            if not is_sovereign_threatened(previews[action], root)
+        ]
+        eligible = safe_actions or list(actions)
+
+        policy_choices = {baseline}
+        for _ in range(max(0, self.policy_samples - 1)):
+            policy_choices.add(self.base.choose(state, actions, rng))
+        ranked = sorted(
+            eligible,
+            key=lambda action: _position_score(previews[action], root),
+            reverse=True,
+        )
+        candidates = [action for action in policy_choices if action in eligible]
+        for action in ranked:
+            if action not in candidates:
+                candidates.append(action)
+            if len(candidates) >= self.max_root_candidates:
+                break
+
+        scored: dict[Action, float] = {}
+        reply_nodes = 0
+        quiescence_nodes = 0
+        immediate_loss: dict[Action, bool] = {}
+        for action in candidates:
+            result = previews[action]
+            replies = legal_actions(result)
+            if not replies:
+                scored[action] = _position_score(result, root)
+                immediate_loss[action] = result.winner is root.opponent
+                continue
+            losing_replies = [reply for reply in replies if _immediate_win_action(result, reply)]
+            if losing_replies:
+                scored[action] = -1_000_000.0
+                immediate_loss[action] = True
+                reply_nodes += len(losing_replies)
+                continue
+            immediate_loss[action] = False
+            replies = sorted(
+                replies,
+                key=lambda reply: self._reply_priority(result, reply, root),
+                reverse=True,
+            )[: self.max_reply_candidates]
+            reply_leaves: list[tuple[float, GameState]] = []
+            for reply in replies:
+                reply_nodes += 1
+                leaf = preview_action(result, reply)
+                reply_leaves.append((_position_score(leaf, root), leaf))
+            if reply_leaves:
+                worst_score, worst_leaf = min(reply_leaves, key=lambda item: item[0])
+                # Extend only the principal tactical reply, and only when it
+                # directly threatens the acting Sovereign. This avoids the
+                # horizon problem without expanding every capture branch.
+                if is_sovereign_threatened(worst_leaf, root):
+                    worst_score, extra_nodes = self._quiescent_score(worst_leaf, root)
+                    quiescence_nodes += extra_nodes
+                scored[action] = worst_score
+            else:
+                scored[action] = _position_score(result, root)
+
+        best = max(scored.values())
+        near_best = [
+            action for action, score in scored.items()
+            if score >= best - self.near_best_margin
+        ]
+        weights = [math.exp((scored[action] - best) / 3.0) for action in near_best]
+        baseline_score = scored.get(baseline, _position_score(previews[baseline], root))
+        baseline_was_eligible = baseline in scored
+        if (
+            baseline_was_eligible
+            and not immediate_loss.get(baseline, False)
+            and best < baseline_score + self.override_threshold
+        ):
+            chosen = baseline
+        else:
+            chosen = _weighted_choice(near_best, weights, rng)
+        reason = self._override_reason(
+            state, baseline, chosen, previews, immediate_loss, baseline_score, scored[chosen]
+        )
+        self.last_search_info = {
+            "searched": True,
+            "overrode": chosen != baseline,
+            "reason": reason,
+            "root_candidates": len(candidates),
+            "reply_nodes": reply_nodes,
+            "quiescence_nodes": quiescence_nodes,
+            "baseline_score": baseline_score,
+            "chosen_score": scored[chosen],
+        }
+        return chosen
+
+    @staticmethod
+    def _reply_priority(state: GameState, action: Action, root: Player) -> float:
+        if _immediate_win_action(state, action):
+            return 1_000_000.0
+        priority = 12.0 * sum(
+            PIECE_VALUES[piece.kind] for piece in _removed_target_pieces(state, action)
+        )
+        if not isinstance(action, MoveAction) and action.effect_target is not None:
+            priority += 18.0
+        root_sovereign = _sovereign_square(state, root)
+        if root_sovereign is not None:
+            priority += max(
+                0.0,
+                10.0
+                - abs(action.destination[0] - root_sovereign[0])
+                - abs(action.destination[1] - root_sovereign[1]),
+            )
+        return priority
+
+    def _quiescent_score(
+        self, state: GameState, root: Player
+    ) -> tuple[float, int]:
+        if state.is_over:
+            return _position_score(state, root), 0
+        threatened = is_sovereign_threatened(state, root)
+        if not threatened:
+            return _position_score(state, root), 0
+        forcing = []
+        for action in legal_actions(state):
+            result = preview_action(state, action)
+            if (
+                _immediate_win_action(state, action)
+                or (threatened and not is_sovereign_threatened(result, root))
+            ):
+                forcing.append((action, result))
+        if not forcing:
+            return _position_score(state, root), 0
+        forcing.sort(key=lambda item: _position_score(item[1], root), reverse=True)
+        selected = forcing[: self.max_reply_candidates]
+        return max(_position_score(result, root) for _, result in selected), len(selected)
+
+    @staticmethod
+    def _override_reason(
+        state: GameState,
+        baseline: Action,
+        chosen: Action,
+        previews: dict[Action, GameState],
+        immediate_loss: dict[Action, bool],
+        baseline_score: float,
+        chosen_score: float,
+    ) -> str:
+        if chosen == baseline:
+            return "confirmed"
+        if immediate_loss.get(baseline, False) and not immediate_loss.get(chosen, False):
+            return "avoided_immediate_loss"
+        if _removed_target_pieces(state, chosen):
+            return "preferred_capture"
+        if (
+            is_sovereign_threatened(previews[chosen], state.turn.opponent)
+            and not is_sovereign_threatened(previews[baseline], state.turn.opponent)
+        ):
+            return "preferred_sovereign_pressure"
+        if chosen_score > baseline_score + 20.0:
+            return "avoided_tactical_loss"
+        return "improved_reply_score"
 
 
 @dataclass(slots=True)
@@ -742,6 +1235,22 @@ class HeightRushPolicy(HeuristicPolicy):
         if winning:
             return rng.choice(winning)
         if not is_sovereign_threatened(state, state.turn):
+            if (
+                state.rules.height_three_requires_shared_neutral_presence
+                and not state.in_development
+                and not state.height_three_unlocked[state.turn]
+            ):
+                gate_openers = [
+                    action
+                    for action in actions
+                    if preview_action(state, action).height_three_unlocked[state.turn]
+                ]
+                if gate_openers:
+                    return _weighted_choice(
+                        gate_openers,
+                        [self._base_action_weight(state, action) for action in gate_openers],
+                        rng,
+                    )
             if (
                 state.rules.height_three_requires_nonsovereign_move
                 and not state.in_development
@@ -1249,6 +1758,327 @@ class SovereignRacePolicy(HeuristicPolicy):
 
 
 @dataclass(slots=True)
+class ThreatDevelopmentPolicy(HeuristicPolicy):
+    """Develop cheap optionality, then create defended and converging threats."""
+
+    name: str = "threat_development"
+
+    def choose(
+        self, state: GameState, actions: Sequence[Action], rng: random.Random
+    ) -> Action:
+        sovereign_captures = [
+            action for action in actions if self._captures_sovereign(state, action)
+        ]
+        if sovereign_captures:
+            return rng.choice(sovereign_captures)
+        other_wins = [action for action in actions if self._wins_game(state, action)]
+        if other_wins:
+            return rng.choice(other_wins)
+
+        candidates = list(actions)
+        previews: dict[Action, GameState] = {}
+
+        def result(action: Action) -> GameState:
+            if action not in previews:
+                previews[action] = preview_action(state, action)
+            return previews[action]
+
+        if is_sovereign_threatened(state, state.turn):
+            safe = [
+                action
+                for action in candidates
+                if not is_sovereign_threatened(result(action), state.turn)
+            ]
+            if safe:
+                candidates = safe
+
+        without_idle_spy = [
+            action
+            for action in candidates
+            if not self._is_nonconverting_spy_placement(state, action)
+        ]
+        if without_idle_spy:
+            candidates = without_idle_spy
+
+        # Clean captures are a priority tier, not merely another weighted
+        # preference. The only alternatives retained are protected or
+        # converging direct Sovereign threats, which can plausibly be stronger
+        # than routine material gain.
+        free_captures = [
+            action for action in candidates if is_free_capture(state, action, result(action))
+        ]
+        if free_captures:
+            sovereign_overrides: list[Action] = []
+            for action in candidates:
+                if action in free_captures:
+                    continue
+                candidate_result = result(action)
+                if not is_sovereign_threatened(candidate_result, state.turn.opponent):
+                    continue
+                sources, protected = sovereign_attack_profile(candidate_result, state.turn)
+                if sources >= 2 or protected:
+                    sovereign_overrides.append(action)
+            candidates = free_captures + sovereign_overrides
+
+        if state.in_development:
+            weights = [
+                self._development_weight(state, action, result(action))
+                * self._development_strategy_weight(state, action, result(action))
+                for action in candidates
+            ]
+        else:
+            weights = [
+                self._strategic_weight(state, action, result(action))
+                * self._strategy_weight(state, action, result(action))
+                for action in candidates
+            ]
+        return _weighted_choice(candidates, weights, rng)
+
+    def _development_strategy_weight(
+        self, state: GameState, action: Action, result: GameState
+    ) -> float:
+        return 1.0
+
+    def _strategy_weight(
+        self, state: GameState, action: Action, result: GameState
+    ) -> float:
+        return 1.0
+
+    def _development_weight(
+        self, state: GameState, action: Action, result: GameState
+    ) -> float:
+        if isinstance(action, MoveAction):
+            return 0.0001
+        player = state.turn
+        own_stacks = [
+            stack
+            for stack in state.board.values()
+            if stack[-1].owner is player and stack[-1].kind is not PieceType.SOVEREIGN
+        ]
+        required = state.rules.development_placements_per_player
+        desired_platforms = max(3, (required + 1) // 2)
+        existing = state.board.get(action.destination)
+        starts_stack = existing is None
+        structure = 8.0 if starts_stack == (len(own_stacks) < desired_platforms) else 0.18
+        piece_weights = {
+            PieceType.INFANTRY: 12.0,
+            PieceType.REINFORCEMENT: 1.4,
+            PieceType.DRAGOON: 1.15,
+            PieceType.CHARIOT: 1.15,
+            PieceType.GRIFFIN: 0.65,
+            PieceType.MARSHAL: 0.25,
+        }
+        weight = structure * piece_weights.get(action.piece, 0.08)
+        if existing and len(existing) == 1 and all(
+            piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+            for piece in existing
+        ):
+            weight *= 2.0
+        buried = valuable_burial_value(state, action)
+        if buried:
+            weight /= 1.0 + 2.0 * buried
+        own_sovereign = _sovereign_square(result, player)
+        if own_sovereign is not None and stack_controls_square(result, action.destination, own_sovereign):
+            weight *= 1.45
+        file, rank = action.destination
+        relative_rank = rank if player is Player.WHITE else 8 - rank
+        weight *= (0.9, 1.15, 1.4)[relative_rank]
+        weight *= 1.0 + 0.06 * (4 - abs(file - 4))
+        weight *= _vector_piece_weight(state, action.piece, action.destination)
+        return max(0.0001, weight)
+
+    def _strategic_weight(
+        self, state: GameState, action: Action, result: GameState
+    ) -> float:
+        player = state.turn
+        enemy = player.opponent
+        weight = self._base_action_weight(state, action)
+        was_threatened = is_sovereign_threatened(state, player)
+        remains_threatened = is_sovereign_threatened(result, player)
+        enemy_threatened = is_sovereign_threatened(result, enemy)
+        tactical = self._is_tactical(state, action) or enemy_threatened
+
+        if is_free_capture(state, action, result):
+            weight *= 25.0
+
+        if remains_threatened:
+            weight *= 0.001
+        elif was_threatened:
+            weight *= 18.0
+            if is_royal_interposition_trap(state, action):
+                weight *= 5.0
+
+        attack_sources, protected_sources = sovereign_attack_profile(result, player)
+        if enemy_threatened:
+            weight *= 5.0
+            threat_kind = (
+                state.board[action.source][-1].kind
+                if isinstance(action, MoveAction)
+                else action.piece
+            )
+            weight *= max(0.7, 1.0 + 0.22 * (5.0 - min(5.0, PIECE_VALUES[threat_kind])))
+        if attack_sources >= 2:
+            weight *= 3.5 + 0.5 * (attack_sources - 2)
+        if protected_sources:
+            weight *= 2.2 + 0.4 * protected_sources
+
+        if (
+            state.rules.height_three_requires_shared_neutral_presence
+            and not any(state.height_three_unlocked.values())
+            and all(result.height_three_unlocked.values())
+            and not tactical
+        ):
+            weight *= 0.08
+
+        buried = valuable_burial_value(state, action)
+        if buried:
+            weight /= 1.0 + 1.8 * buried
+
+        if not isinstance(action, MoveAction):
+            existing = state.board.get(action.destination)
+            if action.piece is PieceType.INFANTRY:
+                if existing is None:
+                    weight *= 2.0
+                elif len(existing) == 1 and all(
+                    piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+                    for piece in existing
+                ):
+                    weight *= 2.4
+                elif len(existing) == 2:
+                    weight *= 0.25
+            elif (
+                existing
+                and len(existing) == 2
+                and all(
+                    piece.kind in {PieceType.INFANTRY, PieceType.REINFORCEMENT}
+                    for piece in existing
+                )
+                and action.piece in {
+                    PieceType.DRAGOON,
+                    PieceType.CHARIOT,
+                    PieceType.GRIFFIN,
+                    PieceType.MARSHAL,
+                }
+            ):
+                weight *= 2.4
+            if action.piece is PieceType.MARSHAL and not enemy_threatened:
+                weight *= 0.45
+            elif action.piece is PieceType.GRIFFIN and not enemy_threatened:
+                weight *= 0.75
+
+            own_sovereign = _sovereign_square(result, player)
+            if own_sovereign is not None and stack_controls_square(result, action.destination, own_sovereign):
+                weight *= 1.35
+
+            weight *= _vector_piece_weight(state, action.piece, action.destination)
+
+            if action.piece in {PieceType.BALLISTA, PieceType.TREBUCHET}:
+                if action.effect_target is None:
+                    weight *= 0.04
+                elif not was_threatened and not enemy_threatened:
+                    weight *= 0.45
+
+        purposes = action_purpose_count(state, action, result)
+        if purposes >= 2:
+            weight *= 1.0 + 0.55 * (purposes - 1)
+
+        return max(0.0001, weight)
+
+
+@dataclass(slots=True)
+class BalancedV2Policy(ThreatDevelopmentPolicy):
+    """Shared competent play with no dominant strategic bias."""
+
+    name: str = "balanced_v2"
+
+
+@dataclass(slots=True)
+class HeightV2Policy(ThreatDevelopmentPolicy):
+    name: str = "height_v2"
+
+    def _development_strategy_weight(self, state, action, result) -> float:
+        stack = result.board.get(action.destination)
+        return 2.0 if stack and len(stack) == 2 else 1.0
+
+    def _strategy_weight(self, state, action, result) -> float:
+        stack = result.board.get(action.destination)
+        if not stack or stack[-1].owner is not state.turn:
+            return 1.0
+        if len(stack) == 3 and stack[-1].kind not in IMMOBILE_TOPS:
+            return 3.0
+        if len(stack) == 2:
+            return 1.6
+        return 1.0
+
+
+@dataclass(slots=True)
+class SpyV2Policy(ThreatDevelopmentPolicy):
+    name: str = "spy_v2"
+
+    def _strategy_weight(self, state, action, result) -> float:
+        if isinstance(action, MoveAction):
+            return 1.0
+        existing = state.board.get(action.destination)
+        if action.piece is PieceType.SPY and existing and existing[-1].owner is state.turn.opponent:
+            value = sum(PIECE_VALUES[piece.kind] for piece in existing)
+            return 3.0 + value
+        if (
+            existing
+            and existing[-1].owner is state.turn
+            and existing[-1].kind is PieceType.SPY
+            and action.piece not in IMMOBILE_TOPS
+        ):
+            return 4.0
+        return 1.0
+
+
+@dataclass(slots=True)
+class MaterialV2Policy(ThreatDevelopmentPolicy):
+    name: str = "material_v2"
+
+    def _strategy_weight(self, state, action, result) -> float:
+        removed = sum(PIECE_VALUES[p.kind] for p in _removed_target_pieces(state, action))
+        lost = sum(PIECE_VALUES[p.kind] for p in _own_move_attrition_pieces(state, action))
+        if not removed:
+            return 1.0
+        return max(0.2, 1.0 + 0.9 * removed - 0.8 * lost)
+
+
+@dataclass(slots=True)
+class SovereignPressureV2Policy(ThreatDevelopmentPolicy):
+    name: str = "sovereign_pressure_v2"
+
+    def _strategy_weight(self, state, action, result) -> float:
+        sources, protected = sovereign_attack_profile(result, state.turn)
+        if not sources:
+            return 1.0
+        return 2.0 + 1.6 * sources + 1.2 * protected
+
+
+@dataclass(slots=True)
+class ArtilleryReserveV2Policy(ThreatDevelopmentPolicy):
+    name: str = "artillery_reserve_v2"
+
+    def _strategy_weight(self, state, action, result) -> float:
+        if isinstance(action, MoveAction) or action.piece not in {PieceType.BALLISTA, PieceType.TREBUCHET}:
+            return 1.0
+        if action.effect_target is None:
+            return 0.05
+        was_threatened = is_sovereign_threatened(state, state.turn)
+        is_safe = not is_sovereign_threatened(result, state.turn)
+        removed = sum(PIECE_VALUES[p.kind] for p in _removed_target_pieces(state, action))
+        if was_threatened and is_safe:
+            return 12.0 + removed
+        target = state.board[action.effect_target]
+        if len(target) == 3 or is_sovereign_threatened(result, state.turn.opponent):
+            return 2.0 + removed
+        # Ordinary material shots remain legal, but this overlay should hold
+        # its one-copy artillery for a rescue, a tall target, or a direct
+        # Sovereign threat instead of spending it for routine tempo.
+        return 0.015 * (1.0 + removed)
+
+
+@dataclass(slots=True)
 class MaterialControlPolicy(HeuristicPolicy):
     """Prefer favorable exchanges and durable, independent material pressure."""
 
@@ -1296,7 +2126,9 @@ class MaterialControlPolicy(HeuristicPolicy):
         return super().choose(state, actions, rng)
 
 
-def policy_by_name(name: str, *, mirror_opening: bool = False) -> Policy:
+def policy_by_name(
+    name: str, *, mirror_opening: bool = False, tactical_search: bool = False
+) -> Policy:
     base_name, separator, plan_name = name.partition("@")
     name = base_name
     if name == "uniform":
@@ -1307,6 +2139,20 @@ def policy_by_name(name: str, *, mirror_opening: bool = False) -> Policy:
         base = HeuristicPolicy(name="tactical")
     elif name == "material_control":
         base = MaterialControlPolicy()
+    elif name == "threat_development":
+        base = ThreatDevelopmentPolicy()
+    elif name == "balanced_v2":
+        base = BalancedV2Policy()
+    elif name == "height_v2":
+        base = HeightV2Policy()
+    elif name == "spy_v2":
+        base = SpyV2Policy()
+    elif name == "material_v2":
+        base = MaterialV2Policy()
+    elif name == "sovereign_pressure_v2":
+        base = SovereignPressureV2Policy()
+    elif name == "artillery_reserve_v2":
+        base = ArtilleryReserveV2Policy()
     elif name == "spy_rush":
         base = SpyRushPolicy()
     elif name == "artillery_rush":
@@ -1334,13 +2180,20 @@ def policy_by_name(name: str, *, mirror_opening: bool = False) -> Policy:
     else:
         raise ValueError(f"unknown policy: {name}")
 
-    if not separator or plan_name == "control":
-        return base
-    try:
-        plan = OPENING_PLANS[base_name][plan_name]
-    except KeyError as exc:
-        choices = ", ".join(opening_plan_names(base_name)) or "none"
-        raise ValueError(
-            f"unknown opening plan {plan_name!r} for {base_name}; choices: {choices}"
-        ) from exc
-    return PlannedPolicy(base=base, plan=plan, mirror=mirror_opening, name=f"{base_name}@{plan_name}")
+    if separator and plan_name != "control":
+        try:
+            plan = OPENING_PLANS[base_name][plan_name]
+        except KeyError as exc:
+            choices = ", ".join(opening_plan_names(base_name)) or "none"
+            raise ValueError(
+                f"unknown opening plan {plan_name!r} for {base_name}; choices: {choices}"
+            ) from exc
+        base = PlannedPolicy(
+            base=base,
+            plan=plan,
+            mirror=mirror_opening,
+            name=f"{base_name}@{plan_name}",
+        )
+    if tactical_search:
+        return TacticalSearchPolicy(base=base)
+    return base
