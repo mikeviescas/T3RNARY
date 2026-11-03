@@ -45,23 +45,22 @@ static func supported_kinds() -> Array[String]:
 
 
 static func _draw_sovereign(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	# Crown, orb, and double base: a state emblem rather than a chess King.
-	canvas.draw_circle(c + Vector2(0.0, -0.51) * r, r * 0.105, color)
+	# Broad triangular prongs match the standalone crown used on the board.
 	var crown := _points(c, r, [
-		Vector2(-0.58, 0.24), Vector2(-0.50, -0.33),
-		Vector2(-0.20, -0.08), Vector2(0.0, -0.42),
-		Vector2(0.20, -0.08), Vector2(0.50, -0.33),
-		Vector2(0.58, 0.24),
+		Vector2(-0.64, 0.25), Vector2(-0.58, -0.50),
+		Vector2(-0.22, -0.12), Vector2(0.0, -0.62),
+		Vector2(0.22, -0.12), Vector2(0.58, -0.50),
+		Vector2(0.64, 0.25),
 	])
 	canvas.draw_colored_polygon(crown, color)
-	canvas.draw_line(c + Vector2(-0.58, 0.28) * r, c + Vector2(0.58, 0.28) * r, color, r * 0.16, true)
-	canvas.draw_line(c + Vector2(-0.48, 0.52) * r, c + Vector2(0.48, 0.52) * r, color, r * 0.13, true)
+	canvas.draw_line(c + Vector2(-0.62, 0.30) * r, c + Vector2(0.62, 0.30) * r, color, r * 0.17, true)
+	canvas.draw_line(c + Vector2(-0.52, 0.55) * r, c + Vector2(0.52, 0.55) * r, color, r * 0.15, true)
 
 
 static func _draw_infantry(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	# Three grounded spears read as a formation rather than a single Soldier.
+	# Three pikes are the current manufactured-piece emblem.
 	for column in [-0.34, 0.0, 0.34]:
-		var tip_y: float = -0.64 if is_zero_approx(column) else -0.49
+		var tip_y := -0.58
 		canvas.draw_line(c + Vector2(column, 0.55) * r, c + Vector2(column, tip_y + 0.15) * r, color, r * 0.105, true)
 		var spearhead := _points(c, r, [
 			Vector2(column, tip_y),
@@ -69,7 +68,6 @@ static func _draw_infantry(canvas: CanvasItem, c: Vector2, r: float, color: Colo
 			Vector2(column + 0.14, tip_y + 0.22),
 		])
 		canvas.draw_colored_polygon(spearhead, color)
-	canvas.draw_line(c + Vector2(-0.52, 0.34) * r, c + Vector2(0.52, 0.34) * r, color, r * 0.10, true)
 
 
 static func _draw_dragoon(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
@@ -116,13 +114,19 @@ static func _draw_marshal(canvas: CanvasItem, c: Vector2, r: float, color: Color
 
 
 static func _draw_trebuchet(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:
-	var width := r * 0.12
-	canvas.draw_line(c + Vector2(-0.50, 0.52) * r, c + Vector2(0.34, 0.52) * r, color, width, true)
-	canvas.draw_line(c + Vector2(-0.35, 0.48) * r, c + Vector2(-0.05, -0.47) * r, color, width, true)
-	canvas.draw_line(c + Vector2(0.23, 0.48) * r, c + Vector2(-0.05, -0.47) * r, color, width, true)
-	canvas.draw_line(c + Vector2(-0.18, -0.34) * r, c + Vector2(0.50, -0.03) * r, color, width, true)
-	canvas.draw_line(c + Vector2(0.48, -0.06) * r, c + Vector2(0.48, 0.30) * r, color, width * 0.55, true)
-	canvas.draw_circle(c + Vector2(0.48, 0.38) * r, r * 0.13, color)
+	# Current overhead inverted-cross frame, shown at its standard 45-degree angle.
+	var root := Transform2D(deg_to_rad(-45.0), c)
+	var width := r * 0.13
+	canvas.draw_line(root * (Vector2(0.0, -0.48) * r), root * (Vector2(0.0, 0.46) * r), color, width, true)
+	canvas.draw_line(root * (Vector2(-0.48, 0.20) * r), root * (Vector2(0.48, 0.20) * r), color, width, true)
+	var spoon := PackedVector2Array()
+	for point in [Vector2(-0.17, -0.40), Vector2(0.17, -0.40), Vector2(0.25, -0.57), Vector2(0.17, -0.69), Vector2(-0.17, -0.69), Vector2(-0.25, -0.57)]:
+		spoon.append(root * (point * r))
+	canvas.draw_colored_polygon(spoon, color)
+	canvas.draw_line(root * (Vector2(-0.57, 0.07) * r), root * (Vector2(-0.57, 0.34) * r), color, width * 0.82, true)
+	canvas.draw_line(root * (Vector2(0.57, 0.07) * r), root * (Vector2(0.57, 0.34) * r), color, width * 0.82, true)
+	canvas.draw_line(root * (Vector2(-0.17, 0.54) * r), root * (Vector2(0.17, 0.54) * r), color, width * 0.82, true)
+	canvas.draw_circle(root * (Vector2(0.0, 0.20) * r), r * 0.10, color)
 
 
 static func _draw_ballista(canvas: CanvasItem, c: Vector2, r: float, color: Color) -> void:

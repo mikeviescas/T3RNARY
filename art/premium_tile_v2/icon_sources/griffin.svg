@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Tall rear wing: large enough to read as a wing, but behind the torso. -->
+  <path fill="#000" d="M263 278 C210 252 160 214 127 169 L61 151 L116 123 L60 89 L135 99 L103 48 L173 80 L171 27 C224 76 258 143 278 224 Z"/>
+
+  <!-- Narrow upright body with a crested eagle head and hooked beak. -->
+  <path fill="#000" d="M220 322 C211 281 222 242 252 213 C270 195 278 174 278 146 C278 119 290 96 313 80 L309 54 L337 72 C360 61 385 65 405 80 L391 98 L452 117 L407 145 L371 138 C353 153 349 177 359 204 C373 241 371 282 351 320 C332 356 299 374 266 363 C243 356 226 342 220 322 Z"/>
+
+  <!-- Two separated eagle forelegs. -->
+  <path fill="#000" d="M326 188 L352 205 L408 166 L421 182 L407 195 L435 184 L443 203 L420 216 L446 218 L443 238 L407 230 L365 252 L337 233 Z"/>
+  <path fill="#000" d="M333 243 L355 265 L418 270 L421 290 L443 277 L453 295 L434 309 L457 314 L450 334 L414 316 L355 305 L322 278 Z"/>
+
+  <!-- Two separated lion hind legs. -->
+  <path fill="#000" d="M242 337 L278 350 L245 417 L261 432 L284 419 L294 437 L276 453 L300 455 L296 475 L254 467 L211 430 Z"/>
+  <path fill="#000" d="M297 349 L333 337 L363 398 L389 413 L406 398 L419 414 L403 431 L427 431 L427 452 L386 453 L339 429 Z"/>
+
+  <!-- Separate curled lion tail. -->
+  <path fill="none" stroke="#000" stroke-width="19" stroke-linecap="round" d="M229 333 C174 326 130 346 126 386 C123 416 96 429 76 412 C57 396 65 370 91 365"/>
+  <path fill="#000" d="M77 348 L116 363 L89 394 Z"/>
+</svg>
