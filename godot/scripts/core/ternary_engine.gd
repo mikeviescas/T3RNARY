@@ -133,6 +133,14 @@ static func _movement_destinations(state: Dictionary, source: String) -> Array:
 	return moves
 
 
+static func movement_destinations(state: Dictionary, source: String) -> Array:
+	# Read-only rules-engine query used by analysis and computer players. Keeping
+	# this calculation here prevents AI code from reimplementing movement rules.
+	if not state.board.has(source):
+		return []
+	return _movement_destinations(state, source)
+
+
 static func _ray(state: Dictionary, origin: Vector2i, direction: Vector2i, max_range: int) -> Array:
 	var result: Array = []
 	for distance in range(1, max_range + 1):
@@ -252,6 +260,21 @@ static func _spy_can_convert(state: Dictionary, player: String, target: Array, p
 	return true
 
 
+static func can_spy_convert(state: Dictionary, player: String, destination: String, recalled := false) -> bool:
+	if not state.board.has(destination):
+		return false
+	var target: Array = state.board[destination]
+	if target.is_empty() or str(target[-1].owner) != Rules.opponent(player):
+		return false
+	if recalled:
+		if int(state.reserves[player].get(Rules.RECALL, 0)) <= 0 or int(state.discards[player].get(Rules.SPY, 0)) <= 0:
+			return false
+	else:
+		if int(state.reserves[player].get(Rules.SPY, 0)) <= 0:
+			return false
+	return _spy_can_convert(state, player, target, not recalled)
+
+
 static func _resulting_height(state: Dictionary, player: String, kind: String, destination: String) -> int:
 	var existing = state.board.get(destination)
 	if existing == null:
@@ -301,6 +324,19 @@ static func apply_action(state: Dictionary, raw_action: Dictionary, adjudicate_d
 	if not Codec.actions_contain(legal_actions(state), action):
 		push_error("Illegal action: %s" % JSON.stringify(action))
 		return {}
+	return _apply_legal_action(state, action, adjudicate_draw)
+
+
+static func simulate_action(state: Dictionary, raw_action: Dictionary) -> Dictionary:
+	# Search callers pass actions produced by legal_actions(state). Skipping a
+	# second full move-generation pass makes look-ahead substantially cheaper;
+	# live play continues to use apply_action and receives strict validation.
+	if is_over(state):
+		return {}
+	return _apply_legal_action(state, Codec.normalize_action(raw_action), false)
+
+
+static func _apply_legal_action(state: Dictionary, action: Dictionary, adjudicate_draw: bool) -> Dictionary:
 	var result := state.duplicate(true)
 	var player: String = state.turn
 	var was_development := in_development(state)

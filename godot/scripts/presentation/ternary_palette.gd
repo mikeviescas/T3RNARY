@@ -4,6 +4,11 @@ extends RefCounted
 # Table and interface
 const BACKGROUND := Color("111419")
 const BACKGROUND_WARM := Color("1b1714")
+const TABLE_WOOD_DARK := Color("24150d")
+const TABLE_WOOD := Color("3b2416")
+const TABLE_WOOD_LIGHT := Color("55331d")
+const TRAY_WELL := Color("111211")
+const TRAY_RIM := Color("4e2d18")
 const PANEL := Color("191d22")
 const PANEL_RAISED := Color("232830")
 const PANEL_LINE := Color("454b53")

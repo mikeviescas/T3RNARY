@@ -11,10 +11,12 @@ const ROOT_CANDIDATES := 6
 const SEARCH_CANDIDATES := 6
 const ROOT_ACTIONS_EVALUATED := 36
 const SEARCH_ACTIONS_EVALUATED := 24
-const FORCING_EXTENSIONS := 2
+const FORCING_EXTENSIONS := 1
 const FORCING_CANDIDATES := 4
 const FORCING_ACTIONS_EVALUATED := 18
 const ROOT_EXPOSURE_WEIGHT := 3.0
+const MOBILE_TOPS := [Rules.DRAGOON, Rules.CHARIOT, Rules.GRIFFIN, Rules.MARSHAL]
+const SEALED_TOPS := [Rules.SPY, Rules.BALLISTA, Rules.TREBUCHET]
 
 const PIECE_VALUES := {
 	Rules.SOVEREIGN: 1000.0,
@@ -31,6 +33,25 @@ const PIECE_VALUES := {
 }
 
 var last_decision: Dictionary = {}
+var improved_policy := true
+
+
+func _init(use_improved_policy := true) -> void:
+	improved_policy = use_improved_policy
+
+
+func choose_sovereign_file() -> int:
+	# Black owns the distance choice in the Sovereign draft. The baseline AI
+	# currently prefers the C/G band; board reflection makes C and G equivalent
+	# until White chooses the same-side or opposite-side response.
+	return 2
+
+
+func choose_sovereign_response_file(black_file: int) -> int:
+	# White owns the same-side/opposite-side response. The baseline computer
+	# chooses the reflected file, maximizing the initial distance between the
+	# Sovereigns while preserving Black's selected edge distance.
+	return Rules.board_size() - 1 - black_file
 
 
 func choose_action(state: Dictionary) -> Dictionary:
@@ -42,25 +63,62 @@ func choose_action(state: Dictionary) -> Dictionary:
 	var wins := _winning_actions(state, actions, player)
 	if not wins.is_empty():
 		var winning_action: Dictionary = wins[0]
-		last_decision = _decision(winning_action, "immediate victory", WIN_SCORE, wins.size())
+		last_decision = _decision_for_state(state, winning_action, "immediate victory", WIN_SCORE, wins.size())
+		return last_decision
+	if _all_actions_allow_immediate_opponent_win(state, actions, player):
+		var opponent := Rules.opponent(player)
+		last_decision = {
+			"resign": true,
+			"reason": "every legal action allows an immediate %s victory" % opponent.capitalize(),
+			"score": -WIN_SCORE,
+			"candidates_considered": actions.size(),
+			"search_depth": 1,
+		}
 		return last_decision
 	if Game.in_development(state):
 		var opening := _choose_opening_action(state, actions)
-		last_decision = _decision(opening, "Infantry development", _opening_score(state, opening), actions.size())
+		last_decision = _decision_for_state(state, opening, "Infantry development", _opening_score(state, opening), actions.size())
 		return last_decision
 
 	var candidates := _candidate_actions(state, actions, ROOT_CANDIDATES, ROOT_ACTIONS_EVALUATED)
 	var best_action: Dictionary = candidates[0]
 	var best_score := -WIN_SCORE
+	var was_threatened := Game.is_sovereign_threatened(state, player)
+	var has_safe_interposition := was_threatened and _has_safe_interposition(state, actions, player)
 	for action_value in candidates:
 		var action: Dictionary = action_value
-		var result := Game.apply_action(state, action, false)
+		var result := Game.simulate_action(state, action)
 		var score := _search(result, player, REPLY_DEPTH, -WIN_SCORE, WIN_SCORE, FORCING_EXTENSIONS)
 		score -= ROOT_EXPOSURE_WEIGHT * _action_stack_exposure(result, player, action)
+		if improved_policy:
+			score -= _sealed_stack_action_penalty(state, action, player)
+			score -= _premium_commitment_penalty(state, action, result, player)
+			score -= _special_option_commitment_penalty(state, action, result, player)
+			score -= _quiet_infantry_move_penalty(state, action, result, player)
+			score -= _premature_conquer_advance_penalty(state, action, result, player)
+			score += _development_action_bonus(state, action, result, player)
+			score += 6.0 * (_exposure_pressure(result, Rules.opponent(player)) - _exposure_pressure(result, player))
+			score += 8.0 * (_spy_exposure_pressure(result, Rules.opponent(player)) - _spy_exposure_pressure(result, player))
+			score += 1.75 * float(_sovereign_liberties(result, player) - _sovereign_liberties(result, Rules.opponent(player)))
+			if has_safe_interposition:
+				var attack_square := str(action.get("effect_target", action.get("destination", "")))
+				if attack_square in Game.sovereign_attack_sources(state, Rules.opponent(player)) and not Game.is_sovereign_threatened(result, player):
+					# Removing the attacking Stack is stronger than merely obstructing
+					# its line, and remains the first defensive preference.
+					score += 180.0
+				elif _is_interposition(state, action, result, player):
+					# Preserve the Sovereign's square and gain development tempo when a
+					# real block is tactically sound. Cheap material is preferred, but
+					# any effective tile is better than treating flight as automatic.
+					# The adjacent block also preserves a Royal Attack counter.
+					score += 180.0 - 45.0 * _interposition_cost(state, action)
+					score += 80.0 if _interposition_is_sovereign_adjacent(state, action, player) else 0.0
+				elif _moves_sovereign(state, action):
+					score -= 35.0
 		if score > best_score or (is_equal_approx(score, best_score) and _action_key(action) < _action_key(best_action)):
 			best_score = score
 			best_action = action
-	last_decision = _decision(best_action, _reason_for(state, best_action), best_score, candidates.size())
+	last_decision = _decision_for_state(state, best_action, _reason_for(state, best_action), best_score, candidates.size())
 	return last_decision
 
 
@@ -71,15 +129,24 @@ func _search(state: Dictionary, perspective: String, depth: int, alpha_value: fl
 		if state.get("winner") == Rules.opponent(perspective):
 			return -WIN_SCORE + float(state.get("ply", 0))
 		return 0.0
+	var player_to_move := str(state.turn)
+	# Apply the same one-turn forced-loss proof used for resignation inside the
+	# tactical search. Otherwise a disposable block can look like a successful
+	# defense even when a protected attacker simply captures it and recreates an
+	# unavoidable Sovereign attack on the following turn.
+	if Game.is_sovereign_threatened(state, player_to_move):
+		var defensive_actions := Game.legal_actions(state)
+		if _all_actions_allow_immediate_opponent_win(state, defensive_actions, player_to_move):
+			return (-WIN_SCORE + float(state.get("ply", 0))) if player_to_move == perspective else (WIN_SCORE - float(state.get("ply", 0)))
 	var candidate_limit := SEARCH_CANDIDATES
 	var evaluation_limit := SEARCH_ACTIONS_EVALUATED
 	if depth <= 0:
-		var player_to_move := str(state.turn)
 		# A current attack on the opposing Sovereign is already a one-action win;
 		# score it directly instead of expanding another full legal-action set.
 		if Game.is_sovereign_threatened(state, Rules.opponent(player_to_move)):
 			return (WIN_SCORE - float(state.get("ply", 0)) - 1.0) if player_to_move == perspective else (-WIN_SCORE + float(state.get("ply", 0)) + 1.0)
-		if extensions_left <= 0 or not Game.is_sovereign_threatened(state, player_to_move):
+		var forcing_position := Game.is_sovereign_threatened(state, player_to_move) or _has_critical_tactical_action(state, player_to_move)
+		if extensions_left <= 0 or not forcing_position:
 			return _evaluate(state, perspective)
 		depth = 1
 		extensions_left -= 1
@@ -95,8 +162,16 @@ func _search(state: Dictionary, perspective: String, depth: int, alpha_value: fl
 	var best := -WIN_SCORE if maximizing else WIN_SCORE
 	for action_value in candidates:
 		var action: Dictionary = action_value
-		var result := Game.apply_action(state, action, false)
+		var result := Game.simulate_action(state, action)
 		var score := _search(result, perspective, depth - 1, alpha, beta, extensions_left)
+		if improved_policy:
+			var containment_penalty := _sealed_stack_action_penalty(state, action, str(state.turn))
+			var commitment_penalty := _premium_commitment_penalty(state, action, result, str(state.turn))
+			commitment_penalty += _special_option_commitment_penalty(state, action, result, str(state.turn))
+			commitment_penalty += _quiet_infantry_move_penalty(state, action, result, str(state.turn))
+			commitment_penalty += _premature_conquer_advance_penalty(state, action, result, str(state.turn))
+			var total_penalty := containment_penalty + commitment_penalty - _development_action_bonus(state, action, result, str(state.turn))
+			score += -total_penalty if maximizing else total_penalty
 		if maximizing:
 			best = maxf(best, score)
 			alpha = maxf(alpha, best)
@@ -137,8 +212,20 @@ func _candidate_actions(state: Dictionary, actions: Array, limit: int, evaluatio
 		return str(a.key) < str(b.key)
 	)
 	var selected: Array = []
+	if improved_policy:
+		# Preserve different kinds of answers to a threat. A raw top-six list can
+		# otherwise contain six near-identical Sovereign retreats while omitting a
+		# capture, block, counter-threat, or developing defense.
+		var wanted_categories := ["win", "capture_attacker", "interpose", "counter_threat", "save_premium", "develop", "sovereign_move", "other"] if was_threatened else ["win", "capture", "counter_threat", "save_premium", "develop", "move", "place"]
+		for category in wanted_categories:
+			for entry in entries:
+				if str(entry.category) == category and entry.action not in selected:
+					selected.append(entry.action)
+					break
+			if selected.size() >= limit:
+				return selected
 	for entry in entries:
-		if bool(entry.forcing):
+		if bool(entry.forcing) and entry.action not in selected:
 			selected.append(entry.action)
 			if selected.size() >= limit:
 				return selected
@@ -154,7 +241,7 @@ func _candidate_actions(state: Dictionary, actions: Array, limit: int, evaluatio
 
 
 func _candidate_entry(state: Dictionary, action: Dictionary, player: String, opponent: String, was_threatened: bool, reject_unsafe: bool) -> Dictionary:
-	var result := Game.apply_action(state, action, false)
+	var result := Game.simulate_action(state, action)
 	if result.is_empty():
 		return {}
 	var safe := not Game.is_sovereign_threatened(result, player)
@@ -169,8 +256,33 @@ func _candidate_entry(state: Dictionary, action: Dictionary, player: String, opp
 		"safe": safe,
 		"forcing": forcing,
 		"priority": _action_priority(state, action, result, player),
+		"category": _action_category(state, action, result, player, was_threatened),
 		"key": _action_key(action),
 	}
+
+
+func _action_category(state: Dictionary, action: Dictionary, result: Dictionary, player: String, was_threatened: bool) -> String:
+	if result.get("winner") == player:
+		return "win"
+	var attack_square := str(action.get("effect_target", action.get("destination", "")))
+	if was_threatened and attack_square in Game.sovereign_attack_sources(state, Rules.opponent(player)):
+		return "capture_attacker"
+	if was_threatened and _is_interposition(state, action, result, player):
+		return "interpose"
+	if Game.is_sovereign_threatened(result, Rules.opponent(player)):
+		return "counter_threat"
+	if _saves_exposed_premium(state, action, result, player):
+		return "save_premium"
+	if str(action.get("type", "")) == "move":
+		var source_stack: Array = state.board.get(str(action.get("source", "")), [])
+		if not source_stack.is_empty() and str(source_stack[-1].kind) == Rules.SOVEREIGN:
+			return "sovereign_move"
+		return "move"
+	if _is_developing_placement(state, action, player):
+		return "develop"
+	if _is_static_forcing(state, action):
+		return "capture"
+	return "other" if was_threatened else "place"
 
 
 func _prefilter_actions(state: Dictionary, actions: Array, limit: int) -> Array:
@@ -237,6 +349,7 @@ func _static_priority(state: Dictionary, action: Dictionary) -> float:
 		return WIN_SCORE
 	var score := 0.0
 	var destination := str(action.get("destination", ""))
+	var simulated_result: Dictionary = Game.simulate_action(state, action) if improved_policy else {}
 	if action.get("effect_target") != null:
 		var target: Array = state.board.get(str(action.effect_target), [])
 		score += 50000.0 + 1000.0 * float(target.size())
@@ -245,20 +358,37 @@ func _static_priority(state: Dictionary, action: Dictionary) -> float:
 		if state.board.has(destination):
 			var target: Array = state.board[destination]
 			score += 30000.0 + 1000.0 * float(target.size())
+			# Preserve capture-and-threat moves through the reduced search
+			# prefilter. Otherwise numerous legal artillery shots can crowd a
+			# protected mating capture out of the reply candidate set.
+			var result := simulated_result if improved_policy else Game.simulate_action(state, action)
+			if not result.is_empty() and Game.is_sovereign_threatened(result, Rules.opponent(player)):
+				score += 100000.0
 		var source: Array = state.board.get(str(action.get("source", "")), [])
 		if source.size() == 3:
 			score += 600.0
+		if improved_policy:
+			score -= 700.0 * _quiet_infantry_move_penalty(state, action, simulated_result, player)
+			score -= 500.0 * _premature_conquer_advance_penalty(state, action, simulated_result, player)
 	else:
 		var kind := str(action.get("piece", ""))
 		if kind == Rules.SPY and state.board.has(destination):
 			score += 45000.0
 		elif kind == Rules.INFANTRY:
 			score += 2500.0
+			if improved_policy and state.board.has(destination):
+				score -= 2800.0
+		elif improved_policy and kind in MOBILE_TOPS and _is_developing_placement(state, action, player):
+			score += 3600.0
 		if state.board.has(destination):
 			var existing: Array = state.board[destination]
 			score += 1200.0 * float(existing.size())
 			if not existing.is_empty() and str(existing[-1].kind) in [Rules.MARSHAL, Rules.GRIFFIN, Rules.DRAGOON, Rules.CHARIOT]:
 				score -= 2500.0
+	if improved_policy:
+		score -= 100.0 * _sealed_stack_action_penalty(state, action, player)
+		if not simulated_result.is_empty():
+			score += 500.0 * _development_action_bonus(state, action, simulated_result, player)
 	score -= 6000.0 * _static_destination_exposure(state, action, player)
 	return score
 
@@ -298,6 +428,43 @@ func _winning_actions(state: Dictionary, actions: Array, player: String) -> Arra
 	return wins
 
 
+func _all_actions_allow_immediate_opponent_win(state: Dictionary, actions: Array, player: String) -> bool:
+	if str(state.get("turn", "")) != player or actions.is_empty():
+		return false
+	var opponent := Rules.opponent(player)
+	for action_value in actions:
+		var action: Dictionary = action_value
+		var result := Game.simulate_action(state, action)
+		if result.is_empty():
+			return false
+		if result.get("winner") == player or bool(result.get("is_draw", false)):
+			return false
+		if not _has_immediate_win(result, opponent):
+			return false
+	return true
+
+
+func _has_immediate_win(state: Dictionary, player: String) -> bool:
+	if str(state.get("turn", "")) != player:
+		return false
+	return _position_allows_immediate_win(state, player)
+
+
+func _position_allows_immediate_win(state: Dictionary, player: String) -> bool:
+	if Game.is_sovereign_threatened(state, Rules.opponent(player)):
+		return true
+	if not state.rules.get("infiltration_victory", false):
+		return false
+	var sovereign := Game.sovereign_square(state, player)
+	if sovereign.is_empty():
+		return false
+	var winning_rank := Rules.board_size() - 1 if player == Rules.WHITE else 0
+	for destination_value in Game.movement_destinations(state, sovereign):
+		if Rules.square_to_xy(str(destination_value)).y == winning_rank:
+			return true
+	return false
+
+
 func _is_conquer_move(state: Dictionary, action: Dictionary, player: String) -> bool:
 	if not state.rules.get("infiltration_victory", false) or str(action.get("type", "")) != "move":
 		return false
@@ -331,6 +498,8 @@ func _choose_opening_action(state: Dictionary, actions: Array) -> Dictionary:
 
 
 func _opening_score(state: Dictionary, action: Dictionary) -> float:
+	if improved_policy:
+		return _improved_opening_score(state, action)
 	var score := 0.0
 	var kind := str(action.get("piece", ""))
 	if kind == Rules.INFANTRY:
@@ -355,6 +524,50 @@ func _opening_score(state: Dictionary, action: Dictionary) -> float:
 	return score
 
 
+func _improved_opening_score(state: Dictionary, action: Dictionary) -> float:
+	var player := str(state.turn)
+	var kind := str(action.get("piece", ""))
+	var destination := str(action.get("destination", ""))
+	var existing: Array = state.board.get(destination, [])
+	var foundations := _foundation_count(state, player)
+	var mobile_stacks := _mobile_stack_count(state, player)
+	var score := 0.0
+	if kind == Rules.INFANTRY:
+		if existing.is_empty():
+			# Two flexible foundations are the conservative opening default. A
+			# third foundation should lose to completing one of the first two.
+			score += 12000.0 if foundations < 2 else 6500.0
+			score += _foundation_geometry_score(state, player, destination)
+		else:
+			# Two buried Infantry represent a deliberate concentrated power-Stack
+			# opening, not generic development.
+			score += 4200.0
+	elif kind in MOBILE_TOPS and existing.size() == 1 and str(existing[-1].kind) == Rules.INFANTRY:
+		score += 12000.0 if foundations >= 2 else 7600.0
+		score += _vector_affinity(state, player, kind, destination)
+		var result := Game.simulate_action(state, action)
+		if not result.is_empty():
+			score += 8.0 * _development_threat_score(result, player, destination)
+		# Dragoons, Chariots, and Griffins establish opening capability without
+		# spending a scarce Marshal before a concrete tactical reason exists.
+		if kind == Rules.MARSHAL:
+			score -= 1800.0
+	elif kind in [Rules.DRAGOON, Rules.CHARIOT, Rules.GRIFFIN]:
+		score += 900.0
+	else:
+		score -= 800.0
+	if existing.is_empty():
+		var rank := Rules.square_to_xy(destination).y
+		var front_rank := Rules.home_ranks() - 1 if player == Rules.WHITE else Rules.board_size() - Rules.home_ranks()
+		score += 260.0 - 32.0 * absf(float(rank - front_rank))
+	var sovereign := Game.sovereign_square(state, player)
+	if not sovereign.is_empty():
+		var delta: Vector2i = Rules.square_to_xy(destination) - Rules.square_to_xy(sovereign)
+		var distance: int = abs(delta.x) + abs(delta.y)
+		score += 80.0 - 9.0 * float(abs(distance - 3))
+	return score
+
+
 func _action_priority(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
 	if result.get("winner") == player:
 		return WIN_SCORE
@@ -369,11 +582,14 @@ func _action_priority(state: Dictionary, action: Dictionary, result: Dictionary,
 				score += 500.0
 	if Game.is_sovereign_threatened(state, player) and not Game.is_sovereign_threatened(result, player):
 		score += 12000.0
+		if _is_interposition(state, action, result, player):
+			score += 850.0 - 85.0 * _interposition_cost(state, action)
+			score += 500.0 if _interposition_is_sovereign_adjacent(state, action, player) else 0.0
 	if _touches_height_three(state, action):
 		score += 700.0
 	var action_type := str(action.get("type", ""))
 	if action.get("effect_target") != null:
-		score += 500.0
+		score += 500.0 if not improved_policy else _artillery_commitment_score(state, action, player)
 	if action_type == "move":
 		var source := str(action.get("source", ""))
 		var moving: Array = state.board.get(source, [])
@@ -385,12 +601,24 @@ func _action_priority(state: Dictionary, action: Dictionary, result: Dictionary,
 		var existing: Array = state.board.get(destination, [])
 		if kind == Rules.INFANTRY:
 			score += 45.0
+			if improved_policy:
+				score += 35.0 if existing.is_empty() else -95.0
+		if improved_policy and kind in MOBILE_TOPS and _is_developing_placement(state, action, player):
+			score += 260.0 + _vector_affinity(state, player, kind, destination)
 		if not existing.is_empty():
 			var buried_kind := str(existing[-1].kind)
 			if buried_kind in [Rules.MARSHAL, Rules.GRIFFIN, Rules.DRAGOON, Rules.CHARIOT]:
 				score -= 180.0 * _piece_value(buried_kind)
+	if improved_policy:
+		score -= 40.0 * _sealed_stack_action_penalty(state, action, player)
+		score -= 40.0 * _premium_commitment_penalty(state, action, result, player)
+		score -= 40.0 * _special_option_commitment_penalty(state, action, result, player)
+		score -= 450.0 * _spy_conversion_exposure_at(result, player, str(action.get("destination", "")))
+		score -= 260.0 * _quiet_infantry_move_penalty(state, action, result, player)
+		score -= 180.0 * _premature_conquer_advance_penalty(state, action, result, player)
+		score += 320.0 * _development_action_bonus(state, action, result, player)
 	score -= 500.0 * _action_stack_exposure(result, player, action)
-	return score + 0.01 * _evaluate(result, player)
+	return score + 0.01 * _evaluate(result, player, false)
 
 
 func _action_stack_exposure(result: Dictionary, player: String, action: Dictionary) -> float:
@@ -400,7 +628,72 @@ func _action_stack_exposure(result: Dictionary, player: String, action: Dictiona
 	return _stack_exposure_at(result, player, resulting_square)
 
 
-func _evaluate(state: Dictionary, perspective: String) -> float:
+func _has_safe_interposition(state: Dictionary, actions: Array, player: String) -> bool:
+	if _interposition_squares(state, player).is_empty():
+		return false
+	for action_value in actions:
+		var action: Dictionary = action_value
+		var result := Game.simulate_action(state, action)
+		if not result.is_empty() and _is_interposition(state, action, result, player):
+			return true
+	return false
+
+
+func _is_interposition(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> bool:
+	if not Game.is_sovereign_threatened(state, player) or result.is_empty():
+		return false
+	if Game.is_sovereign_threatened(result, player):
+		return false
+	var destination := str(action.get("destination", ""))
+	return not destination.is_empty() and destination in _interposition_squares(state, player)
+
+
+func _interposition_squares(state: Dictionary, player: String) -> Array:
+	var sovereign := Game.sovereign_square(state, player)
+	if sovereign.is_empty():
+		return []
+	var target := Rules.square_to_xy(sovereign)
+	var squares: Array = []
+	for source_value in Game.sovereign_attack_sources(state, Rules.opponent(player)):
+		var source := Rules.square_to_xy(str(source_value))
+		var delta := target - source
+		var aligned := delta.x == 0 or delta.y == 0 or absi(delta.x) == absi(delta.y)
+		if not aligned:
+			continue
+		var distance := maxi(absi(delta.x), absi(delta.y))
+		if distance <= 1:
+			continue
+		var step := Vector2i(signi(delta.x), signi(delta.y))
+		for offset in range(1, distance):
+			var square := Rules.square(source.x + step.x * offset, source.y + step.y * offset)
+			if square not in squares:
+				squares.append(square)
+	return squares
+
+
+func _interposition_cost(state: Dictionary, action: Dictionary) -> float:
+	if str(action.get("type", "")) == "move":
+		return _stack_value(state.board.get(str(action.get("source", "")), []))
+	return _piece_value(str(action.get("piece", "")))
+
+
+func _interposition_is_sovereign_adjacent(state: Dictionary, action: Dictionary, player: String) -> bool:
+	var sovereign := Game.sovereign_square(state, player)
+	var destination := str(action.get("destination", ""))
+	if sovereign.is_empty() or destination.is_empty():
+		return false
+	var delta := Rules.square_to_xy(destination) - Rules.square_to_xy(sovereign)
+	return maxi(absi(delta.x), absi(delta.y)) == 1
+
+
+func _moves_sovereign(state: Dictionary, action: Dictionary) -> bool:
+	if str(action.get("type", "")) != "move":
+		return false
+	var stack: Array = state.board.get(str(action.get("source", "")), [])
+	return not stack.is_empty() and str(stack[-1].kind) == Rules.SOVEREIGN
+
+
+func _evaluate(state: Dictionary, perspective: String, detailed_position := true) -> float:
 	if Game.is_over(state):
 		if state.get("winner") == perspective:
 			return WIN_SCORE - float(state.get("ply", 0))
@@ -411,20 +704,37 @@ func _evaluate(state: Dictionary, perspective: String) -> float:
 	for player in [Rules.WHITE, Rules.BLACK]:
 		var sign := 1.0 if player == perspective else -1.0
 		for kind in Rules.piece_types():
-			score += sign * 0.90 * _piece_value(str(kind)) * float(state.reserves[player].get(kind, 0))
+			var reserve_factor := 0.90
+			if improved_policy and kind in [Rules.BALLISTA, Rules.TREBUCHET]:
+				reserve_factor = 1.12
+			score += sign * reserve_factor * _piece_value(str(kind)) * float(state.reserves[player].get(kind, 0))
 		for square_value in state.board:
 			var stack: Array = state.board[square_value]
 			if stack.is_empty() or str(stack[-1].owner) != player:
 				continue
+			var sealed := stack.size() == Rules.max_stack_height() and str(stack[-1].kind) in SEALED_TOPS
 			for index in range(stack.size()):
 				var kind := str(stack[index].kind)
 				var agency := 1.0 if index == stack.size() - 1 else 0.72
+				if improved_policy and sealed:
+					agency = 0.18 if index == stack.size() - 1 else 0.35
+				if improved_policy and index == stack.size() - 1 and kind in [Rules.BALLISTA, Rules.TREBUCHET]:
+					agency = minf(agency, 0.48)
 				score += sign * agency * _piece_value(kind)
 				if index < stack.size() - 1 and kind in [Rules.MARSHAL, Rules.GRIFFIN, Rules.DRAGOON, Rules.CHARIOT]:
 					score -= sign * 0.35 * _piece_value(kind)
 			var top_kind := str(stack[-1].kind)
-			if top_kind not in [Rules.SOVEREIGN, Rules.SPY, Rules.BALLISTA, Rules.TREBUCHET, Rules.REINFORCEMENT]:
+			if top_kind not in [Rules.SOVEREIGN, Rules.SPY, Rules.BALLISTA, Rules.TREBUCHET, Rules.REINFORCEMENT] and (not improved_policy or top_kind != Rules.INFANTRY):
 				score += sign * float(stack.size() - 1) * (1.4 if stack.size() < 3 else 2.3)
+		if improved_policy and detailed_position:
+			score += sign * 3.5 * float(_mobile_stack_count(state, player))
+			score += sign * 0.55 * float(_mobility_count(state, player))
+			score += sign * 1.4 * float(_mobile_top_variety(state, player))
+			score += sign * 0.45 * _mobile_threat_pressure(state, player)
+			if not Game.in_development(state):
+				score -= sign * 1.75 * float(_mobile_reserve_count(state, player))
+			score -= sign * 4.0 * _spy_exposure_pressure(state, player)
+			score += sign * 0.7 * _dominant_stack_pressure(state, player)
 	var enemy := Rules.opponent(perspective)
 	if Game.is_sovereign_threatened(state, perspective):
 		score -= 1800.0
@@ -434,15 +744,433 @@ func _evaluate(state: Dictionary, perspective: String) -> float:
 		for source_value in sources:
 			if Game.is_square_protected(state, perspective, str(source_value), str(source_value)):
 				score += 350.0
-	var own_sovereign := Game.sovereign_square(state, perspective)
-	var enemy_sovereign := Game.sovereign_square(state, enemy)
-	if not own_sovereign.is_empty():
-		var own_rank := Rules.square_to_xy(own_sovereign).y
-		score += 2.0 * float(own_rank if perspective == Rules.WHITE else 8 - own_rank)
-	if not enemy_sovereign.is_empty():
-		var enemy_rank := Rules.square_to_xy(enemy_sovereign).y
-		score -= 2.0 * float(enemy_rank if enemy == Rules.WHITE else 8 - enemy_rank)
+	if improved_policy:
+		# Conquer progress is an endgame consideration. During active play a
+		# forward Sovereign move is only useful when the tactic itself justifies it.
+		score += _conquer_progress_score(state, perspective)
+		score -= _conquer_progress_score(state, enemy)
+	else:
+		var own_sovereign := Game.sovereign_square(state, perspective)
+		var enemy_sovereign := Game.sovereign_square(state, enemy)
+		if not own_sovereign.is_empty():
+			var own_rank := Rules.square_to_xy(own_sovereign).y
+			score += 2.0 * float(own_rank if perspective == Rules.WHITE else 8 - own_rank)
+		if not enemy_sovereign.is_empty():
+			var enemy_rank := Rules.square_to_xy(enemy_sovereign).y
+			score -= 2.0 * float(enemy_rank if enemy == Rules.WHITE else 8 - enemy_rank)
 	return score
+
+
+func _foundation_count(state: Dictionary, player: String) -> int:
+	var count := 0
+	for square_value in state.board:
+		var stack: Array = state.board[square_value]
+		if not stack.is_empty() and str(stack[-1].owner) == player and str(stack[-1].kind) == Rules.INFANTRY:
+			count += 1
+	return count
+
+
+func _mobile_stack_count(state: Dictionary, player: String) -> int:
+	var count := 0
+	for square_value in state.board:
+		var stack: Array = state.board[square_value]
+		if not stack.is_empty() and str(stack[-1].owner) == player and str(stack[-1].kind) in MOBILE_TOPS:
+			count += 1
+	return count
+
+
+func _mobile_top_variety(state: Dictionary, player: String) -> int:
+	var kinds := {}
+	for square_value in state.board:
+		var stack: Array = state.board[square_value]
+		if not stack.is_empty() and str(stack[-1].owner) == player and str(stack[-1].kind) in MOBILE_TOPS:
+			kinds[str(stack[-1].kind)] = true
+	return kinds.size()
+
+
+func _mobility_count(state: Dictionary, player: String) -> int:
+	var total := 0
+	for square_value in state.board:
+		var source := str(square_value)
+		var stack: Array = state.board[source]
+		if not stack.is_empty() and str(stack[-1].owner) == player and str(stack[-1].kind) in MOBILE_TOPS:
+			total += Game.movement_destinations(state, source).size()
+	return total
+
+
+func _is_developing_placement(state: Dictionary, action: Dictionary, player: String) -> bool:
+	if str(action.get("type", "")) not in ["place", "recall"]:
+		return false
+	var kind := str(action.get("piece", ""))
+	if kind not in MOBILE_TOPS:
+		return false
+	var destination := str(action.get("destination", ""))
+	var existing: Array = state.board.get(destination, [])
+	return not existing.is_empty() and str(existing[-1].owner) == player and str(existing[-1].kind) == Rules.INFANTRY
+
+
+func _vector_affinity(state: Dictionary, player: String, kind: String, destination: String) -> float:
+	var enemy_square := Game.sovereign_square(state, Rules.opponent(player))
+	if destination.is_empty():
+		return 0.0
+	var score := 0.0
+	var own_square := Game.sovereign_square(state, player)
+	if not own_square.is_empty():
+		var own_delta: Vector2i = Rules.square_to_xy(own_square) - Rules.square_to_xy(destination)
+		var own_ax := absi(own_delta.x)
+		var own_ay := absi(own_delta.y)
+		if kind in [Rules.CHARIOT, Rules.MARSHAL] and (own_ax == 0 or own_ay == 0):
+			score += 75.0
+		if kind in [Rules.DRAGOON, Rules.MARSHAL] and own_ax == own_ay:
+			score += 75.0
+	if enemy_square.is_empty():
+		return score
+	var delta: Vector2i = Rules.square_to_xy(enemy_square) - Rules.square_to_xy(destination)
+	var ax := absi(delta.x)
+	var ay := absi(delta.y)
+	if kind == Rules.CHARIOT:
+		return score + (85.0 if ax == 0 or ay == 0 else 0.0)
+	if kind == Rules.DRAGOON:
+		return score + (85.0 if ax == ay else 0.0)
+	if kind == Rules.GRIFFIN:
+		return score + (55.0 if Vector2i(ax, ay) in [Vector2i(1, 2), Vector2i(2, 1), Vector2i(2, 3), Vector2i(3, 2)] else 12.0)
+	return score + 35.0
+
+
+func _foundation_geometry_score(state: Dictionary, player: String, destination: String) -> float:
+	if destination.is_empty():
+		return 0.0
+	var position := Rules.square_to_xy(destination)
+	var score := 0.0
+	var own_sovereign := Game.sovereign_square(state, player)
+	if not own_sovereign.is_empty():
+		var delta := Rules.square_to_xy(own_sovereign) - position
+		var ax := absi(delta.x)
+		var ay := absi(delta.y)
+		# The direct Chariot corridor is the most dangerous opening lane. A
+		# diagonal foundation also blocks a Dragoon route and can become a
+		# counter-Dragoon platform.
+		if ax == 0:
+			score += 340.0
+		elif ay == 0:
+			score += 75.0
+		if ax == ay:
+			score += 235.0
+	var enemy_sovereign := Game.sovereign_square(state, Rules.opponent(player))
+	if not enemy_sovereign.is_empty():
+		var enemy_delta := Rules.square_to_xy(enemy_sovereign) - position
+		var enemy_ax := absi(enemy_delta.x)
+		var enemy_ay := absi(enemy_delta.y)
+		# Offensive geometry is useful, but protecting the friendly Sovereign's
+		# penetration lanes remains the conservative default.
+		if enemy_ax == 0 or enemy_ay == 0:
+			score += 105.0
+		if enemy_ax == enemy_ay:
+			score += 90.0
+	return score
+
+
+func _development_threat_score(state: Dictionary, player: String, source: String) -> float:
+	if source.is_empty() or not state.board.has(source):
+		return 0.0
+	var stack: Array = state.board[source]
+	if stack.is_empty() or str(stack[-1].owner) != player or str(stack[-1].kind) not in MOBILE_TOPS:
+		return 0.0
+	var take_score := 0.0
+	var attrit_score := 0.0
+	var take_count := 0
+	for destination_value in Game.movement_destinations(state, source):
+		var destination := str(destination_value)
+		if not state.board.has(destination):
+			continue
+		var target: Array = state.board[destination]
+		if target.is_empty() or str(target[-1].owner) == player:
+			continue
+		if str(target[-1].kind) == Rules.SOVEREIGN:
+			take_score += 250.0
+			take_count += 1
+		elif stack.size() >= target.size():
+			take_score += 28.0 + 7.0 * _stack_value(target)
+			take_count += 1
+		else:
+			var removed: Array = target.slice(0, stack.size())
+			attrit_score += 5.0 + 2.5 * _stack_value(removed)
+	if take_count > 1:
+		take_score += 20.0 * float(take_count - 1)
+	return take_score + attrit_score
+
+
+func _development_action_bonus(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
+	if Game.in_development(state) or not _is_developing_placement(state, action, player):
+		return 0.0
+	var destination := str(action.get("destination", ""))
+	var bonus := 10.0
+	if bool(state.height_three_unlocked.get(player, false)):
+		bonus += 6.0
+	var deficit := maxi(0, _mobile_stack_count(state, Rules.opponent(player)) - _mobile_stack_count(state, player))
+	bonus += 5.0 * float(deficit)
+	var threat_score := _development_threat_score(result, player, destination)
+	bonus += minf(18.0, 0.16 * threat_score)
+	var resulting_stack: Array = result.board.get(destination, [])
+	if resulting_stack.size() == Rules.max_stack_height():
+		bonus += 4.0
+	return bonus
+
+
+func _quiet_infantry_move_penalty(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
+	if str(action.get("type", "")) != "move":
+		return 0.0
+	var source := str(action.get("source", ""))
+	var destination := str(action.get("destination", ""))
+	var stack: Array = state.board.get(source, [])
+	if stack.is_empty() or str(stack[-1].kind) != Rules.INFANTRY:
+		return 0.0
+	# Captures, forced defenses, and actual wins are tactical Infantry work, not
+	# the purposeless pawn-like advancement this rule is meant to suppress.
+	if state.board.has(destination) or result.get("winner") == player:
+		return 0.0
+	if Game.is_sovereign_threatened(state, player) and not Game.is_sovereign_threatened(result, player):
+		return 0.0
+	if _is_sparse_endgame(state):
+		return 2.0
+	if not bool(state.height_three_unlocked.get(player, false)) and bool(result.height_three_unlocked.get(player, false)):
+		return 9.0
+	if _development_threat_score(result, player, destination) > 0.0:
+		return 7.0
+	return 38.0 if stack.size() == Rules.max_stack_height() else 30.0
+
+
+func _premature_conquer_advance_penalty(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
+	if str(action.get("type", "")) != "move" or _is_sparse_endgame(state):
+		return 0.0
+	var source := str(action.get("source", ""))
+	var moving: Array = state.board.get(source, [])
+	if moving.is_empty() or str(moving[-1].kind) != Rules.SOVEREIGN:
+		return 0.0
+	var before_progress := _sovereign_progress(state, player)
+	var after_progress := _sovereign_progress(result, player)
+	var advance := after_progress - before_progress
+	if advance <= 0:
+		return 0.0
+	if Game.is_sovereign_threatened(state, player):
+		# Forward flight is a tie-breaker only when the escape also creates real
+		# tactical counterpressure.
+		return 0.0 if Game.is_sovereign_threatened(result, Rules.opponent(player)) else 4.0 * float(advance)
+	return 22.0 * float(advance)
+
+
+func _sovereign_progress(state: Dictionary, player: String) -> int:
+	var sovereign := Game.sovereign_square(state, player)
+	if sovereign.is_empty():
+		return 0
+	var rank := Rules.square_to_xy(sovereign).y
+	return rank if player == Rules.WHITE else Rules.board_size() - 1 - rank
+
+
+func _conquer_progress_score(state: Dictionary, player: String) -> float:
+	if not state.rules.get("infiltration_victory", false) or not _is_sparse_endgame(state):
+		return 0.0
+	return 3.0 * float(_sovereign_progress(state, player))
+
+
+func _is_sparse_endgame(state: Dictionary) -> bool:
+	var board_units := 0
+	for square_value in state.board:
+		var stack: Array = state.board[square_value]
+		if not stack.is_empty() and str(stack[-1].kind) != Rules.SOVEREIGN:
+			board_units += 1
+	var reserves := 0
+	for player in [Rules.WHITE, Rules.BLACK]:
+		for kind in Rules.piece_types():
+			reserves += int(state.reserves[player].get(kind, 0))
+	# A temporarily sparse board is not an endgame while meaningful reserve
+	# development remains available. That was precisely the failure mode where
+	# the computer chased Conquer instead of deploying its power pieces.
+	return reserves == 0 or (board_units <= 4 and reserves <= 2)
+
+
+func _mobile_reserve_count(state: Dictionary, player: String) -> int:
+	var count := 0
+	for kind in MOBILE_TOPS:
+		count += int(state.reserves[player].get(kind, 0))
+	return count
+
+
+func _mobile_threat_pressure(state: Dictionary, player: String) -> float:
+	var pressure := 0.0
+	for source_value in state.board:
+		var source := str(source_value)
+		var stack: Array = state.board[source]
+		if stack.is_empty() or str(stack[-1].owner) != player or str(stack[-1].kind) not in MOBILE_TOPS:
+			continue
+		pressure += _development_threat_score(state, player, source)
+	return pressure
+
+
+func _artillery_commitment_score(state: Dictionary, action: Dictionary, player: String) -> float:
+	var target: Array = state.board.get(str(action.get("effect_target", "")), [])
+	if target.is_empty():
+		return 0.0
+	var target_value := _stack_value(target)
+	var kind := str(action.get("piece", ""))
+	var option_cost := _piece_value(kind)
+	# Material swing is scored separately. This term only distinguishes an
+	# emergency/high-value shot from cashing in a scarce artillery option early.
+	return 90.0 * maxf(0.0, target_value - option_cost) - 140.0
+
+
+func _premium_commitment_penalty(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
+	if str(action.get("type", "")) not in ["place", "recall"] or str(action.get("piece", "")) != Rules.MARSHAL:
+		return 0.0
+	# A Marshal that wins material, creates a direct threat, or answers a direct
+	# threat has earned its deployment. The penalty is for speculative spending.
+	if result.get("winner") == player or Game.is_sovereign_threatened(result, Rules.opponent(player)):
+		return 0.0
+	if Game.is_sovereign_threatened(state, player) and not Game.is_sovereign_threatened(result, player):
+		return 0.0
+	if _material_swing(state, result, player) > 0.0:
+		return 0.0
+	var marshals_on_board := 0
+	for square_value in state.board:
+		for piece in state.board[square_value]:
+			if str(piece.owner) == player and str(piece.kind) == Rules.MARSHAL:
+				marshals_on_board += 1
+	var penalty := 4.0
+	if marshals_on_board > 0:
+		penalty += 7.0
+	if int(state.reserves[player].get(Rules.MARSHAL, 0)) <= 1:
+		penalty += 5.0
+	return penalty
+
+
+func _saves_exposed_premium(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> bool:
+	if str(action.get("type", "")) != "move":
+		return false
+	var source := str(action.get("source", ""))
+	var moving: Array = state.board.get(source, [])
+	if moving.is_empty() or str(moving[-1].kind) != Rules.MARSHAL:
+		return false
+	var before := _stack_exposure_at(state, player, source)
+	if before <= 0.0:
+		return false
+	var destination := str(action.get("destination", ""))
+	return _stack_exposure_at(result, player, destination) < before
+
+
+func _special_option_commitment_penalty(state: Dictionary, action: Dictionary, result: Dictionary, player: String) -> float:
+	var kind := str(action.get("piece", ""))
+	if kind not in [Rules.BALLISTA, Rules.TREBUCHET] or action.get("effect_target") == null:
+		return 0.0
+	if Game.is_sovereign_threatened(state, player) and not Game.is_sovereign_threatened(result, player):
+		return 0.0
+	var target: Array = state.board.get(str(action.get("effect_target", "")), [])
+	if target.is_empty():
+		return 0.0
+	var firing_height: int = state.board.get(str(action.get("destination", "")), []).size() + 1
+	var lethal: bool = firing_height >= target.size()
+	var active_target := str(target[-1].kind) in MOBILE_TOPS or str(target[-1].kind) in [Rules.SOVEREIGN, Rules.INFANTRY]
+	var recalled := str(action.get("type", "")) == "recall"
+	if lethal and active_target:
+		return 1.5 if recalled else 0.0
+	if not lethal and active_target:
+		return 5.0 if recalled else 2.0
+	# An inert or sealed target rarely justifies spending an artillery option,
+	# especially when Recall is being consumed to obtain the shot.
+	return 12.0 if recalled else 6.0
+
+
+func _sealed_stack_action_penalty(state: Dictionary, action: Dictionary, player: String) -> float:
+	var target_square := str(action.get("effect_target", ""))
+	if target_square.is_empty() and str(action.get("type", "")) == "move":
+		target_square = str(action.get("destination", ""))
+	if target_square.is_empty() or not state.board.has(target_square):
+		return 0.0
+	var target: Array = state.board[target_square]
+	if target.size() != Rules.max_stack_height() or str(target[-1].owner) == player or str(target[-1].kind) not in SEALED_TOPS:
+		return 0.0
+	var attack_height := 0
+	var royal_attack := false
+	if action.get("effect_target") != null:
+		attack_height = state.board.get(str(action.get("destination", "")), []).size() + 1
+	else:
+		var moving: Array = state.board.get(str(action.get("source", "")), [])
+		attack_height = moving.size()
+		royal_attack = not moving.is_empty() and str(moving[-1].kind) == Rules.SOVEREIGN
+	# Nonlethal attrition is worst: it preserves the immobile TOP piece while
+	# reopening the stack for a new mobile TOP. Full capture still releases the
+	# special piece for Recall, but may be justified by a concrete tactic.
+	if not royal_attack and attack_height < target.size():
+		return 34.0
+	var penalty := 11.0
+	var owner := str(target[-1].owner)
+	if int(state.reserves[owner].get(Rules.RECALL, 0)) > 0:
+		penalty += 9.0
+	if royal_attack:
+		penalty += 9.0
+	return penalty
+
+
+func _spy_conversion_exposure_at(state: Dictionary, victim: String, target: String) -> float:
+	if target.is_empty() or not state.board.has(target):
+		return 0.0
+	var stack: Array = state.board[target]
+	if stack.is_empty() or str(stack[-1].owner) != victim or str(stack[-1].kind) == Rules.SOVEREIGN:
+		return 0.0
+	var attacker := Rules.opponent(victim)
+	if not Game.can_spy_convert(state, attacker, target, false) and not Game.can_spy_convert(state, attacker, target, true):
+		return 0.0
+	var exposure := 1.25 * _stack_value(stack)
+	if str(stack[-1].kind) == Rules.MARSHAL:
+		exposure += 3.0
+	return exposure
+
+
+func _spy_exposure_pressure(state: Dictionary, victim: String) -> float:
+	var total := 0.0
+	var largest := 0.0
+	for square_value in state.board:
+		var exposure := _spy_conversion_exposure_at(state, victim, str(square_value))
+		if exposure > 0.0:
+			total += exposure
+			largest = maxf(largest, exposure)
+	return largest + 0.35 * maxf(0.0, total - largest)
+
+
+func _has_critical_tactical_action(state: Dictionary, player: String) -> bool:
+	for source_value in state.board:
+		var source := str(source_value)
+		var stack: Array = state.board[source]
+		if stack.size() != Rules.max_stack_height() or str(stack[-1].owner) != player or str(stack[-1].kind) not in MOBILE_TOPS:
+			continue
+		for destination_value in Game.movement_destinations(state, source):
+			var destination := str(destination_value)
+			if state.board.has(destination) and str(state.board[destination][-1].owner) == Rules.opponent(player):
+				return true
+	return false
+
+
+func _dominant_stack_pressure(state: Dictionary, player: String) -> float:
+	var pressure := 0.0
+	for source_value in state.board:
+		var source := str(source_value)
+		var stack: Array = state.board[source]
+		if stack.size() != Rules.max_stack_height() or str(stack[-1].owner) != player or str(stack[-1].kind) not in MOBILE_TOPS:
+			continue
+		for destination_value in Game.movement_destinations(state, source):
+			var destination := str(destination_value)
+			if not state.board.has(destination):
+				continue
+			var target: Array = state.board[destination]
+			if str(target[-1].owner) == Rules.opponent(player) and str(target[-1].kind) != Rules.SOVEREIGN:
+				pressure += minf(8.0, _stack_value(target))
+	return pressure
+
+
+func _sovereign_liberties(state: Dictionary, player: String) -> int:
+	var sovereign := Game.sovereign_square(state, player)
+	if sovereign.is_empty():
+		return 0
+	return Game.movement_destinations(state, sovereign).size()
 
 
 func _exposure_pressure(state: Dictionary, victim: String) -> float:
@@ -530,10 +1258,12 @@ func _action_key(action: Dictionary) -> String:
 
 
 func _reason_for(state: Dictionary, action: Dictionary) -> String:
-	var result := Game.apply_action(state, action, false)
+	var result := Game.simulate_action(state, action)
 	var player := str(state.turn)
 	if result.get("winner") == player:
 		return "immediate victory"
+	if _is_interposition(state, action, result, player):
+		return "Sovereign interposition"
 	if Game.is_sovereign_threatened(state, player) and not Game.is_sovereign_threatened(result, player):
 		return "Sovereign defense"
 	if action.get("effect_target") != null:
@@ -545,6 +1275,10 @@ func _reason_for(state: Dictionary, action: Dictionary) -> String:
 		return "favorable material exchange"
 	if Game.is_sovereign_threatened(result, Rules.opponent(player)):
 		return "Sovereign pressure"
+	if _is_developing_placement(state, action, player):
+		if _development_threat_score(result, player, str(action.get("destination", ""))) > 0.0:
+			return "threatening power development"
+		return "power development"
 	if _touches_height_three(state, action):
 		return "3-Stack response"
 	return "positional development"
@@ -558,3 +1292,25 @@ func _decision(action: Dictionary, reason: String, score: float, considered: int
 		"candidates_considered": considered,
 		"search_depth": REPORTED_SEARCH_PLIES,
 	}
+
+
+func _decision_for_state(state: Dictionary, action: Dictionary, reason: String, score: float, considered: int) -> Dictionary:
+	var decision := _decision(action, reason, score, considered)
+	var player := str(state.turn)
+	var result := Game.simulate_action(state, action)
+	var destination := str(action.get("destination", ""))
+	decision["diagnostics"] = {
+		"premium_commitment_penalty": _premium_commitment_penalty(state, action, result, player),
+		"special_option_commitment_penalty": _special_option_commitment_penalty(state, action, result, player),
+		"sealed_target_penalty": _sealed_stack_action_penalty(state, action, player),
+		"stack_exposure_after": _action_stack_exposure(result, player, action),
+		"spy_conversion_exposure_after": _spy_conversion_exposure_at(result, player, destination),
+		"enemy_dominant_pressure_before": _dominant_stack_pressure(state, Rules.opponent(player)),
+		"enemy_dominant_pressure_after": _dominant_stack_pressure(result, Rules.opponent(player)),
+		"quiet_infantry_move_penalty": _quiet_infantry_move_penalty(state, action, result, player),
+		"premature_conquer_advance_penalty": _premature_conquer_advance_penalty(state, action, result, player),
+		"development_action_bonus": _development_action_bonus(state, action, result, player),
+		"development_threat_after": _development_threat_score(result, player, destination),
+		"mobile_reserve_before": _mobile_reserve_count(state, player),
+	}
+	return decision

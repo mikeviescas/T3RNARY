@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource path="res://scripts/presentation/tile_design_study.gd" type="Script" id="1"]
+
+[node name="TileDesignStudy" type="Node3D"]
+script = ExtResource("1")

@@ -7,7 +7,7 @@ func _init() -> void:
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	viewport.transparent_bg = false
 	root.add_child(viewport)
-	var scene: PackedScene = load("res://scenes/main.tscn")
+	var scene: PackedScene = load("res://scenes/legacy/legacy_visual_simulator.tscn")
 	var prototype := scene.instantiate()
 	viewport.add_child(prototype)
 	var user_args := OS.get_cmdline_user_args()

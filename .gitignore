@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .DS_Store
+*.blend1
 
 # Local simulation output built from experimental or retired assumptions.
 research/replays/

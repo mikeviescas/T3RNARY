@@ -21,6 +21,10 @@ static func draw_stack(
 ) -> void:
 	var count := kinds.size()
 	var rise := radius * STACK_RISE_RATIO
+	# A broad contact shadow grounds the whole stack before any individual tile
+	# is drawn. Its elliptical footprint suggests a low physical camera rather
+	# than a perfectly flat diagram.
+	canvas.draw_ellipse(center + Vector2(radius * 0.08, radius * 0.34), radius * 0.94, radius * 0.43, Color(0.0, 0.0, 0.0, 0.32))
 	for index in range(count):
 		# Anchor the bottom checker on its square and build the stack upward.
 		var layer_center := center - Vector2(0.0, float(index) * rise)
@@ -47,6 +51,11 @@ static func draw_token(
 	# The pinstripe is the tile's outermost material, not an overlay or a lighting
 	# contour. Everything belonging to the tile is contained inside this circle.
 	var pinstripe_width := maxf(1.25, radius * LAYER_PINSTRIPE_WIDTH_RATIO)
+	# Lower offset rings form the tile wall. The face remains circular and crisp,
+	# but these darker lips give every checker measurable physical thickness.
+	canvas.draw_circle(c + Vector2(radius * 0.035, radius * 0.105), radius * 0.99, Color(0.0, 0.0, 0.0, 0.32))
+	canvas.draw_circle(c + Vector2(0.0, radius * 0.075), radius * 0.98, Palette.token_edge(owner).darkened(0.28))
+	canvas.draw_arc(c + Vector2(0.0, radius * 0.068), radius * 0.91, 0.04 * PI, 0.96 * PI, 32, Color(0.0, 0.0, 0.0, 0.28), maxf(1.0, radius * 0.055), true)
 	canvas.draw_circle(c, radius, Palette.token_layer_border(owner))
 	canvas.draw_circle(c, radius - pinstripe_width, Palette.token_body(owner))
 	# Restrained highlights stay inside the painted edge.
@@ -54,6 +63,7 @@ static func draw_token(
 	canvas.draw_arc(c, radius - pinstripe_width * 1.55, PI * 0.08, PI * 0.92, 36, Color(0.0, 0.0, 0.0, 0.20), maxf(1.0, radius * 0.03), true)
 	canvas.draw_circle(c, radius * 0.72, Palette.token_edge(owner))
 	canvas.draw_circle(c - Vector2(0.0, radius * 0.025), radius * 0.64, Palette.token_face(owner))
+	canvas.draw_arc(c - Vector2(0.0, radius * 0.025), radius * 0.57, PI * 1.04, PI * 1.88, 28, Color(1.0, 1.0, 1.0, 0.12), maxf(1.0, radius * 0.025), true)
 	canvas.draw_arc(c, radius * 0.61, PI, TAU, 24, Color(1.0, 1.0, 1.0, 0.17), maxf(1.0, radius * 0.035), true)
 	if show_icon:
 		Icons.draw_icon(canvas, kind, c - Vector2(0.0, radius * 0.03), radius * 0.58, Palette.token_ink(owner))
